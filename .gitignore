@@ -2,6 +2,7 @@
 build/
 DerivedData/
 Payload/
+out/
 *.ipa
 *.xcarchive
 

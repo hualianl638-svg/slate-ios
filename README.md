@@ -44,12 +44,21 @@ cd "C:\Users\jooy\WorkBuddy\ios app 开发\ios"; git push -u origin main
 
 ### 3. 下载 ipa 并装到手机
 
-1. 构建完成后，在 Actions → 该次运行 → 页面底部 **Artifacts** 下载 `SLATE-ipa.zip`，解压得到 `SLATE.ipa`
-2. Windows 上安装 [Sideloadly](https://sideloadly.io/)（免费），以及 iTunes / iCloud 的 Apple 驱动（Sideloadly 会提示）
-3. iPhone 用数据线连电脑，解锁并点「信任」
-4. 把 `SLATE.ipa` 拖进 Sideloadly，Apple ID 填你的（免费账号即可），点 Start
-5. 手机上：设置 → 通用 → VPN 与设备管理 → 信任你的开发者证书
-6. 回到桌面，图标出现
+**ipa 已经在本地**，不用去网页下载：
+
+```
+C:\Users\jooy\WorkBuddy\ios app 开发\ios\out\SLATE.ipa
+```
+
+（每次云端构建后，从 Actions 页面的 Artifacts 下载 `SLATE-ipa.zip`，解压得到 `SLATE.ipa`。）
+
+安装步骤：
+
+1. Windows 上安装 [Sideloadly](https://sideloadly.io/)（免费），以及 iTunes / iCloud 的 Apple 驱动（Sideloadly 会提示）
+2. iPhone 用数据线连电脑，解锁并点「信任」
+3. 把 `SLATE.ipa` 拖进 Sideloadly，Apple ID 填你的（免费账号即可），点 Start
+4. 手机上：设置 → 通用 → VPN 与设备管理 → 信任你的开发者证书
+5. 回到桌面，图标出现
 
 > **免费证书 7 天过期。** 到期后 App 打不开，重新跑一次 Sideloadly 即可（不用重新构建）。
 > 想免掉这个麻烦，需要加入 Apple Developer Program（$99/年），证书有效期变成 1 年。
