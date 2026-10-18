@@ -1,0 +1,44 @@
+name: SLATE
+options:
+  bundleIdPrefix: app.slate
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  xcodeVersion: "16.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    # 云端只做无签名构建，安装时由 Sideloadly 重新签名
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+
+targets:
+  SLATE:
+    type: application
+    platform: iOS
+    sources:
+      - path: SLATE
+        excludes:
+          - "Info.plist"
+    info:
+      path: SLATE/Info.plist
+      properties:
+        CFBundleDisplayName: SLATE
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSPhotoLibraryUsageDescription: 需要访问相册，用于导入要调色的视频和照片。
+        NSPhotoLibraryAddUsageDescription: 需要写入相册，用于保存导出成片。
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.slate.prototype
+        PRODUCT_NAME: SLATE
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        DEVELOPMENT_TEAM: ""

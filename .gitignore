@@ -1,0 +1,16 @@
+# 构建产物
+build/
+DerivedData/
+Payload/
+*.ipa
+*.xcarchive
+
+# XcodeGen 生成，不入库
+app/SLATE.xcodeproj/
+app/SLATE/Info.plist
+
+# 系统与临时
+.DS_Store
+Thumbs.db
+_t.cmd
+*.log
