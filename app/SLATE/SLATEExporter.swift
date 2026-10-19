@@ -636,7 +636,7 @@ final class SLATEExporter {
     func saveLivePhotoPair(stillData: Data,
                            videoURL: URL,
                            baseName: String) async throws -> String {
-        try await ensureReadWriteAccess()
+        try await ensureFullLibraryAccess()
 
         // 保存前先校验：宁可给出精确原因，也不要把不合格的资源丢给 Photos
         // （Photos 只会回一个笼统的 PHPhotosErrorDomain 3302）。
@@ -661,10 +661,22 @@ final class SLATEExporter {
         try stillData.write(to: stillURL, options: .atomic)
         defer { try? FileManager.default.removeItem(at: stillURL) }
 
-        // 静帧两种喂法都试：fileURL 与 data:。系统对实况图较严，
-        // 不同版本接受的形式不同，这里按 fileURL -> data 的顺序回退。
+        // 三种组合都试，任一成功即止：
+        //   (静帧 fileURL, 先照片)  -> (静帧 data, 先照片)  -> (静帧 data, 先视频)
+        // 系统对实况图配对较严，且不同版本对资源添加顺序敏感。
+        struct PairVariant {
+            let useFileURL: Bool
+            let photoFirst: Bool
+        }
+        let variants = [
+            PairVariant(useFileURL: true, photoFirst: true),
+            PairVariant(useFileURL: false, photoFirst: true),
+            PairVariant(useFileURL: false, photoFirst: false),
+        ]
+
         var lastError: Error?
-        for useFileURL in [true, false] {
+        for variant in variants {
+            let useFileURL = variant.useFileURL
             let box = Box<String?>(nil)
             do {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -674,16 +686,29 @@ final class SLATEExporter {
                         let photoOptions = PHAssetResourceCreationOptions()
                         photoOptions.originalFilename = "\(baseName).JPG"
                         photoOptions.shouldMoveFile = false
-                        if useFileURL {
-                            request.addResource(with: .photo, fileURL: stillURL, options: photoOptions)
-                        } else {
-                            request.addResource(with: .photo, data: stillData, options: photoOptions)
-                        }
 
                         let videoOptions = PHAssetResourceCreationOptions()
                         videoOptions.originalFilename = "\(baseName).MOV"
                         videoOptions.shouldMoveFile = false
-                        request.addResource(with: .pairedVideo, fileURL: videoURL, options: videoOptions)
+
+                        let addPhoto = {
+                            if variant.useFileURL {
+                                request.addResource(with: .photo, fileURL: stillURL, options: photoOptions)
+                            } else {
+                                request.addResource(with: .photo, data: stillData, options: photoOptions)
+                            }
+                        }
+                        let addVideo = {
+                            request.addResource(with: .pairedVideo, fileURL: videoURL, options: videoOptions)
+                        }
+
+                        if variant.photoFirst {
+                            addPhoto()
+                            addVideo()
+                        } else {
+                            addVideo()
+                            addPhoto()
+                        }
 
                         box.value = request.placeholderForCreatedAsset?.localIdentifier
                     } completionHandler: { success, error in
@@ -700,10 +725,20 @@ final class SLATEExporter {
                 // 把资源规格带进错误信息，便于定位（尺寸/时长是最常见的拒收原因）
                 let seconds = (try? await AVURLAsset(url: videoURL).load(.duration)).map { CMTimeGetSeconds($0) } ?? -1
                 let videoKB = videoSize / 1024
+                // 输出实际像素尺寸：静帧与视频尺寸必须严格一致，否则 Photos 拒收
+                let stillPixels = UIImage(data: stillData).map {
+                    "\(Int($0.size.width))×\(Int($0.size.height))"
+                } ?? "未知"
+                var videoPixels = "未知"
+                if let vTrack = try? await AVURLAsset(url: videoURL).loadTracks(withMediaType: .video).first,
+                   let size = try? await vTrack.load(.naturalSize) {
+                    videoPixels = "\(Int(abs(size.width)))×\(Int(abs(size.height)))"
+                }
                 lastError = ExportError.saveFailed(
-                    "\(error.localizedDescription)［诊断：静帧 \(stillData.count / 1024)KB，"
-                    + "视频 \(videoKB)KB / \(String(format: "%.2f", seconds))s，"
-                    + "形式=\(useFileURL ? "fileURL" : "data")］"
+                    "\(error.localizedDescription)［诊断：静帧 \(stillData.count / 1024)KB/\(stillPixels)，"
+                    + "视频 \(videoKB)KB/\(String(format: "%.2f", seconds))s/\(videoPixels)，"
+                    + "形式=\(variant.useFileURL ? "fileURL" : "data")，"
+                    + "顺序=\(variant.photoFirst ? "照→视" : "视→照")］"
                 )
                 continue
             }
@@ -786,6 +821,40 @@ final class SLATEExporter {
                 }
             }
             if !granted { throw ExportError.photoLibraryDenied }
+        default:
+            throw ExportError.photoLibraryDenied
+        }
+    }
+
+    /// 实况图必须要求**完全访问**（`.authorized`）。
+    ///
+    /// 只拿到 `.limited`（有限的照片访问）时，系统允许普通照片/视频入库，
+    /// 但会以 PHPhotosErrorDomain 3302（资源无效）拒绝实况图配对——
+    /// 因为配对需要读取并校验容器内的资源，受限访问做不到。
+    /// 这里给用户明确的修复指引，而不是让他看到笼统的 3302。
+    func ensureFullLibraryAccess() async throws {
+        func status() -> PHAuthorizationStatus {
+            PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        }
+        var current = status()
+        if current == .notDetermined {
+            _ = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                PHPhotoLibrary.requestAuthorization(for: .readWrite) { _ in
+                    continuation.resume(returning: true)
+                }
+            }
+            current = status()
+        }
+        switch current {
+        case .authorized:
+            return
+        case .limited:
+            throw ExportError.saveFailed(
+                "相册权限是「有限的照片访问」。实况图需要完全访问才能配对写入——"
+                + "请到 设置 > SLATE > 照片，改为「完全访问」后重试。"
+            )
+        case .notDetermined:
+            throw ExportError.photoLibraryDenied
         default:
             throw ExportError.photoLibraryDenied
         }
