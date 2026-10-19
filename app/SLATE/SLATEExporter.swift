@@ -97,12 +97,15 @@ final class SLATEExporter {
 
     /// 逐帧渲染并导出视频。
     ///
-    /// - Parameter progress: 0...1 进度回调（主线程）。
+    /// - Parameters:
+    ///   - timeRange: 只导出这段时间（实况图需要截取 3 秒）；nil 表示整段。
+    ///   - progress: 0...1 进度回调（主线程）。
     /// - Returns: 输出的 .mov 临时文件。
     func exportVideo(sourceURL: URL,
                      state: EditState,
                      lut: LUT3D?,
                      settings: ExportSettings,
+                     timeRange: CMTimeRange? = nil,
                      progress: @escaping (Double) -> Void) async throws -> URL {
 
         let asset = AVURLAsset(url: sourceURL, options: [
@@ -150,6 +153,11 @@ final class SLATEExporter {
         }
         reader.add(readerOutput)
 
+        // 只读指定时间窗（实况图截取 3 秒）
+        if let timeRange {
+            reader.timeRange = timeRange
+        }
+
         // Writer
         let writer = try AVAssetWriter(outputURL: outURL, fileType: .mov)
         let codec: AVVideoCodecType = settings.kind == .videoH264 ? .h264 : .hevc
@@ -189,7 +197,9 @@ final class SLATEExporter {
         }
         writer.startSession(atSourceTime: .zero)
 
-        let totalFrames = max(1.0, CMTimeGetSeconds(duration) * frameRate)
+        let effectiveDuration = timeRange.map { CMTimeGetSeconds($0.duration) }
+            ?? CMTimeGetSeconds(duration)
+        let totalFrames = max(1.0, effectiveDuration * frameRate)
         var frameIndex = 0
         let outputSize = CGSize(width: outWidth, height: outHeight)
 
@@ -267,6 +277,140 @@ final class SLATEExporter {
                     continuation.resume()
                 } else {
                     continuation.resume(throwing: ExportError.saveFailed(error?.localizedDescription ?? "未知错误"))
+                }
+            }
+        }
+        return box.value ?? ""
+    }
+
+    // MARK: 实况图
+
+    /// 导出 Apple 实况照片（Live Photo）。
+    ///
+    /// 实况照片在系统里不是"一个文件"，而是**成对的两个资源**：
+    ///   · 一张静止图（JPEG/HEIC）
+    ///   · 一段 ~3 秒的 MOV
+    /// 两者必须在**同一个 `PHPhotoLibrary.performChanges` 事务**里添加，
+    /// 且 `originalFilename` 去掉扩展名后必须完全同名，系统才认成一对
+    /// （相机就是这么存的：IMG_0001.HEIC + IMG_0001.MOV）。
+    /// 分成两次事务写，结果会是"一张照片 + 一段视频"，没有 LIVE 角标。
+    ///
+    /// - Parameters:
+    ///   - targetDuration: 实况图时长，默认 3 秒（Apple 的惯例值）。
+    ///   - progress: 视频部分 0...1 进度。
+    /// - Returns: 静帧 JPG 的临时文件（用于分享/预览）。
+    @discardableResult
+    func exportLivePhoto(sourceURL: URL,
+                         state: EditState,
+                         lut: LUT3D?,
+                         settings: ExportSettings,
+                         targetDuration: Double = 3.0,
+                         progress: @escaping (Double) -> Void) async throws -> URL {
+
+        let asset = AVURLAsset(url: sourceURL, options: [
+            AVURLAssetPreferPreciseDurationAndTimingKey: true,
+        ])
+        let duration = try await asset.load(.duration)
+        let window = Self.livePhotoWindow(assetDuration: duration, target: targetDuration)
+        let midpoint = CMTimeAdd(
+            window.start,
+            CMTimeMultiplyByFloat64(window.duration, multiplier: 0.5)
+        )
+
+        // ---- 1. 静帧：取窗口中点那一帧，按当前调色渲染 ----
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        generator.maximumSize = CGSize(width: 4096, height: 4096)
+
+        let stillCGImage: CGImage
+        do {
+            let (image, _) = try await generator.image(at: midpoint)
+            stillCGImage = image
+        } catch {
+            throw ExportError.renderFailed
+        }
+        guard let renderedStill = renderer.render(CIImage(cgImage: stillCGImage), state: state, lut: lut),
+              let stillData = UIImage(cgImage: renderedStill)
+                .jpegData(compressionQuality: settings.jpegQuality) else {
+            throw ExportError.renderFailed
+        }
+
+        // ---- 2. 3 秒视频（复用视频导出，只截窗口）----
+        // 实况图的视频部分要小一些：3 秒 4K 用 20Mbps 会偏大，这里按 12Mbps。
+        var liveSettings = settings
+        liveSettings.bitrate = min(settings.bitrate, 12_000_000)
+        let videoURL = try await exportVideo(
+            sourceURL: sourceURL,
+            state: state,
+            lut: lut,
+            settings: liveSettings,
+            timeRange: window,
+            progress: progress
+        )
+
+        // ---- 3. 配对写入相册 ----
+        let baseName = "SLATE-Live-\(Self.stamp())"
+        _ = try await saveLivePhotoPair(stillData: stillData, videoURL: videoURL, baseName: baseName)
+
+        // 保留静帧文件供分享
+        let stillURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(baseName).jpg")
+        try? stillData.write(to: stillURL, options: .atomic)
+        return stillURL
+    }
+
+    /// 计算实况图时间窗：居中截取，且不超出素材时长。
+    static func livePhotoWindow(assetDuration: CMTime, target: Double = 3.0) -> CMTimeRange {
+        let total = CMTimeGetSeconds(assetDuration)
+        guard total.isFinite, total > 0 else {
+            return CMTimeRange(start: .zero, duration: CMTime(seconds: 1, preferredTimescale: 600))
+        }
+        let windowDuration = min(target, total)
+        let start = max(0, (total - windowDuration) / 2.0)
+        return CMTimeRange(
+            start: CMTime(seconds: start, preferredTimescale: 600),
+            duration: CMTime(seconds: windowDuration, preferredTimescale: 600)
+        )
+    }
+
+    /// 把「静帧 + 视频」作为一对实况照片写入相册。
+    ///
+    /// - Returns: 新建资源的 localIdentifier。
+    @discardableResult
+    func saveLivePhotoPair(stillData: Data,
+                           videoURL: URL,
+                           baseName: String) async throws -> String {
+        try await ensureAddOnlyAccess()
+
+        guard FileManager.default.fileExists(atPath: videoURL.path) else {
+            throw ExportError.saveFailed("配对的视频文件不存在：\(videoURL.lastPathComponent)")
+        }
+
+        let box = Box<String?>(nil)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            PHPhotoLibrary.shared().performChanges {
+                let request = PHAssetCreationRequest.forAsset()
+
+                // 静帧：.photo 资源，必须是 JPEG 或 HEIC
+                let photoOptions = PHAssetResourceCreationOptions()
+                photoOptions.originalFilename = "\(baseName).JPG"
+                request.addResource(with: .photo, data: stillData, options: photoOptions)
+
+                // 视频：.pairedVideo 资源，文件名主干必须与静帧一致
+                let videoOptions = PHAssetResourceCreationOptions()
+                videoOptions.originalFilename = "\(baseName).MOV"
+                videoOptions.shouldMoveFile = false
+                request.addResource(with: .pairedVideo, fileURL: videoURL, options: videoOptions)
+
+                box.value = request.placeholderForCreatedAsset?.localIdentifier
+            } completionHandler: { success, error in
+                if success {
+                    continuation.resume()
+                } else {
+                    let detail = error?.localizedDescription ?? "系统拒绝了实况照片配对写入"
+                    continuation.resume(throwing: ExportError.saveFailed(detail))
                 }
             }
         }

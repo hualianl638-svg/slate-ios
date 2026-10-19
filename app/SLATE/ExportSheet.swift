@@ -25,6 +25,7 @@ struct ExportSheet: View {
         case photoJPG = "照片 JPG"
         case videoHEVC = "视频 HEVC"
         case videoH264 = "视频 H.264"
+        case livePhoto = "实况图"
     }
 
     var body: some View {
@@ -129,6 +130,11 @@ struct ExportSheet: View {
         switch kind {
         case .photoJPG:
             return "把当前画面按调色结果渲染成 JPG，写入相册。全质量渲染（不受预览分辨率限制）。"
+        case .livePhoto:
+            if model.sourceVideoURL == nil {
+                return "实况图需要视频素材。请导入视频后再导出。"
+            }
+            return "截取视频居中的 3 秒：中点那一帧作为静帧、这段视频作为配对视频，成对写入相册（相册里会显示 LIVE 角标）。本期静帧与配对视频均不带音轨。"
         case .videoHEVC, .videoH264:
             if model.sourceVideoURL == nil {
                 return "当前素材来自照片，没有视频轨道。请导入视频后再导出。"
@@ -149,7 +155,7 @@ struct ExportSheet: View {
             kind: {
                 switch kind {
                 case .photoJPG: return .photoJPEG
-                case .videoHEVC: return .videoHEVC
+                case .videoHEVC, .livePhoto: return .videoHEVC
                 case .videoH264: return .videoH264
                 }
             }(),
@@ -186,6 +192,21 @@ struct ExportSheet: View {
                 try await SLATEExporter.shared.saveVideoToLibrary(fileURL: url)
                 shareURL = url
                 resultText = "视频已导出并保存到相册"
+
+            case .livePhoto:
+                guard let videoURL = model.sourceVideoURL else {
+                    throw ExportError.noVideoTrack
+                }
+                let stillURL = try await SLATEExporter.shared.exportLivePhoto(
+                    sourceURL: videoURL,
+                    state: model.state,
+                    lut: lut,
+                    settings: settings
+                ) { value in
+                    progress = value
+                }
+                shareURL = stillURL
+                resultText = "实况图已导出并保存到相册（相册里应显示 LIVE 角标）"
             }
         } catch {
             errorText = error.localizedDescription
