@@ -35,6 +35,8 @@ final class SLATERenderer {
     private let toneKernel: CIColorKernel?
     /// 色调分离。
     private let splitToneKernel: CIColorKernel?
+    /// HSL 八通道。
+    private let hslKernel: CIColorKernel?
 
     /// 创建失败的内核名。非空时界面应提示用户，而不是让效果静默消失。
     let kernelFailures: [String]
@@ -59,10 +61,13 @@ final class SLATERenderer {
         if tone == nil { failures.append("阴影/高光/黑白色阶") }
         let split = CIColorKernel(source: Self.splitToneSource)
         if split == nil { failures.append("色调分离") }
+        let hsl = CIColorKernel(source: Self.hslSource)
+        if hsl == nil { failures.append("HSL 八通道") }
 
         self.slog3Decode = slog3
         self.toneKernel = tone
         self.splitToneKernel = split
+        self.hslKernel = hsl
         self.kernelFailures = failures
     }
 
@@ -170,6 +175,113 @@ final class SLATERenderer {
     }
     """
 
+    /// HSL 八通道。
+    ///
+    /// 通道中心色相（0...1 圈）：
+    ///   红 0.0000 / 橙 0.0833 / 黄 0.1667 / 绿 0.3333 / 浅绿 0.5000 / 蓝 0.6667 / 紫 0.7778 / 洋红 0.8889
+    /// 半宽（到较近邻居的角距）：
+    ///   30° / 30° / 30° / 60° / 60° / 40° / 40° / 40°（= 0.0833/0.0833/0.0833/0.1667/0.1667/0.1111/0.1111/0.1111）
+    ///
+    /// 权重用**归一化三角帽**：w = max(0, 1 - 环距/半宽)，再除以 Σw。
+    /// 归一化是必须的 —— 不归一化时相邻通道交界处 Σw 只有 0.5，效果会被腰斩。
+    /// CIKL 没有数组与自定义函数，因此 8 个通道与 HSL 往返全部内联展开。
+    private static let hslSource = """
+    kernel vec4 slateHSL(__sample s,
+                         vec4 b0, vec4 b1, vec4 b2, vec4 b3,
+                         vec4 b4, vec4 b5, vec4 b6, vec4 b7) {
+        vec3 c = clamp(s.rgb, 0.0, 1.0);
+
+        // ---- RGB -> HSL ----
+        float mx = max(c.r, max(c.g, c.b));
+        float mn = min(c.r, min(c.g, c.b));
+        float l = (mx + mn) * 0.5;
+        float delta = mx - mn;
+        float h = 0.0;
+        float sat = 0.0;
+        if (delta > 0.00001) {
+            sat = (l > 0.5) ? (delta / max(2.0 - mx - mn, 0.00001))
+                            : (delta / max(mx + mn, 0.00001));
+            if (mx == c.r) {
+                h = (c.g - c.b) / delta + ((c.g < c.b) ? 6.0 : 0.0);
+            } else if (mx == c.g) {
+                h = (c.b - c.r) / delta + 2.0;
+            } else {
+                h = (c.r - c.g) / delta + 4.0;
+            }
+            h = h / 6.0;
+        }
+
+        // ---- 8 通道三角帽权重（含环距折叠）----
+        float d0 = abs(h - 0.00000); d0 = min(d0, 1.0 - d0);
+        float d1 = abs(h - 0.08333); d1 = min(d1, 1.0 - d1);
+        float d2 = abs(h - 0.16667); d2 = min(d2, 1.0 - d2);
+        float d3 = abs(h - 0.33333); d3 = min(d3, 1.0 - d3);
+        float d4 = abs(h - 0.50000); d4 = min(d4, 1.0 - d4);
+        float d5 = abs(h - 0.66667); d5 = min(d5, 1.0 - d5);
+        float d6 = abs(h - 0.77778); d6 = min(d6, 1.0 - d6);
+        float d7 = abs(h - 0.88889); d7 = min(d7, 1.0 - d7);
+
+        float w0 = max(0.0, 1.0 - d0 / 0.08333);
+        float w1 = max(0.0, 1.0 - d1 / 0.08333);
+        float w2 = max(0.0, 1.0 - d2 / 0.08333);
+        float w3 = max(0.0, 1.0 - d3 / 0.16667);
+        float w4 = max(0.0, 1.0 - d4 / 0.16667);
+        float w5 = max(0.0, 1.0 - d5 / 0.11111);
+        float w6 = max(0.0, 1.0 - d6 / 0.11111);
+        float w7 = max(0.0, 1.0 - d7 / 0.11111);
+
+        float total = w0 + w1 + w2 + w3 + w4 + w5 + w6 + w7;
+        if (total > 0.00001) {
+            float inv = 1.0 / total;
+            w0 *= inv; w1 *= inv; w2 *= inv; w3 *= inv;
+            w4 *= inv; w5 *= inv; w6 *= inv; w7 *= inv;
+        }
+
+        // 中性保护：饱和度极低的像素不参与色相/饱和度调整，避免灰面被染色
+        float mask = clamp((sat - 0.02) / 0.08, 0.0, 1.0);
+
+        float hueAdj = (w0 * b0.x + w1 * b1.x + w2 * b2.x + w3 * b3.x
+                      + w4 * b4.x + w5 * b5.x + w6 * b6.x + w7 * b7.x) * mask;
+        float satAdj = (w0 * b0.y + w1 * b1.y + w2 * b2.y + w3 * b3.y
+                      + w4 * b4.y + w5 * b5.y + w6 * b6.y + w7 * b7.y) * mask;
+        float lumAdj = (w0 * b0.z + w1 * b1.z + w2 * b2.z + w3 * b3.z
+                      + w4 * b4.z + w5 * b5.z + w6 * b6.z + w7 * b7.z) * mask;
+
+        // 色相滑杆满量程 ±30°（1/12 圈）
+        float hh = h + hueAdj * (1.0 / 12.0);
+        hh = hh - floor(hh);
+        float s2 = clamp(sat * (1.0 + satAdj), 0.0, 1.0);
+        float l2 = (lumAdj >= 0.0) ? (l + lumAdj * (1.0 - l))
+                                   : (l + lumAdj * l);
+        l2 = clamp(l2, 0.0, 1.0);
+
+        // ---- HSL -> RGB ----
+        float r;
+        float g;
+        float bl;
+        if (s2 <= 0.00001) {
+            r = l2; g = l2; bl = l2;
+        } else {
+            float q = (l2 < 0.5) ? (l2 * (1.0 + s2)) : (l2 + s2 - l2 * s2);
+            float p = 2.0 * l2 - q;
+            float t1 = hh + (1.0 / 3.0); t1 = t1 - floor(t1);
+            float t2 = hh;
+            float t3 = hh - (1.0 / 3.0); t3 = t3 + 1.0 - floor(t3);
+            r = (t1 < 0.166667) ? (p + (q - p) * 6.0 * t1)
+              : ((t1 < 0.5) ? q
+              : ((t1 < 0.666667) ? (p + (q - p) * (0.666667 - t1) * 6.0) : p));
+            g = (t2 < 0.166667) ? (p + (q - p) * 6.0 * t2)
+              : ((t2 < 0.5) ? q
+              : ((t2 < 0.666667) ? (p + (q - p) * (0.666667 - t2) * 6.0) : p));
+            bl = (t3 < 0.166667) ? (p + (q - p) * 6.0 * t3)
+               : ((t3 < 0.5) ? q
+               : ((t3 < 0.666667) ? (p + (q - p) * (0.666667 - t3) * 6.0) : p));
+        }
+
+        return vec4(clamp(vec3(r, g, bl), 0.0, 1.0), s.a);
+    }
+    """
+
     // MARK: - 对外接口
 
     /// 渲染主入口。
@@ -250,7 +362,23 @@ final class SLATERenderer {
             ])
         }
 
-        // ---- 6. 色调分离 ----
+        // ---- 6. HSL 八通道 ----
+        if !state.hsl.isNeutral, let kernel = hslKernel {
+            let bands = state.hsl.ordered
+            var arguments: [Any] = [current]
+            for index in 0..<8 {
+                let band = index < bands.count ? bands[index] : HSLBand()
+                arguments.append(CIVector(
+                    x: CGFloat(band.hue),
+                    y: CGFloat(band.saturation),
+                    z: CGFloat(band.luminance),
+                    w: 0
+                ))
+            }
+            current = kernel.apply(extent: current.extent, arguments: arguments) ?? current
+        }
+
+        // ---- 7. 色调分离 ----
         let st = state.splitToning
         if !st.isNeutral, let kernel = splitToneKernel {
             let amount = max(st.shadows.amount, st.highlights.amount)
@@ -264,7 +392,7 @@ final class SLATERenderer {
             ]) ?? current
         }
 
-        // ---- 7. LUT（在显示参考域套用）----
+        // ---- 8. LUT（在显示参考域套用）----
         if state.lut.isActive, let lut {
             current = applyLUT(current, lut: lut, intensity: state.lut.intensity)
         }

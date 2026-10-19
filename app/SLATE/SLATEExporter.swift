@@ -116,6 +116,10 @@ final class SLATEExporter {
             throw ExportError.noVideoTrack
         }
 
+        // 音轨（可选）：有就透传，没有就静默地只导画面
+        let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+        let audioTrack = audioTracks.first
+
         let naturalSize = try await track.load(.naturalSize)
         let transform = try await track.load(.preferredTransform)
         let duration = try await asset.load(.duration)
@@ -153,6 +157,17 @@ final class SLATEExporter {
         }
         reader.add(readerOutput)
 
+        // 音频读取：`outputSettings: nil` = 透传原始压缩样本，不重新编码
+        var audioReaderOutput: AVAssetReaderTrackOutput?
+        if let audioTrack {
+            let out = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
+            out.alwaysCopiesSampleData = false
+            if reader.canAdd(out) {
+                reader.add(out)
+                audioReaderOutput = out
+            }
+        }
+
         // 只读指定时间窗（实况图截取 3 秒）
         if let timeRange {
             reader.timeRange = timeRange
@@ -189,6 +204,20 @@ final class SLATEExporter {
         }
         writer.add(writerInput)
 
+        // 音频写入：同样 `outputSettings: nil` 走透传，避免重编码损失与额外耗时
+        var audioWriterInput: AVAssetWriterInput?
+        if audioReaderOutput != nil {
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
+            input.expectsMediaDataInRealTime = false
+            if writer.canAdd(input) {
+                writer.add(input)
+                audioWriterInput = input
+            } else {
+                // 容器不接受这条音轨：放弃音频，但不要因此让整个导出失败
+                audioReaderOutput = nil
+            }
+        }
+
         guard reader.startReading() else {
             throw ExportError.readerFailed(reader.error?.localizedDescription ?? "startReading 失败")
         }
@@ -202,6 +231,9 @@ final class SLATEExporter {
         let totalFrames = max(1.0, effectiveDuration * frameRate)
         var frameIndex = 0
         let outputSize = CGSize(width: outWidth, height: outHeight)
+        // 音频单样本预读缓冲：`copyNextSampleBuffer` 取出的样本无法"放回"，
+        // 所以用一份 pending 做时间戳对齐，保证音视频按时间交织写入。
+        var pendingAudio: CMSampleBuffer?
 
         // 逐帧处理
         while let sample = readerOutput.copyNextSampleBuffer() {
@@ -219,6 +251,21 @@ final class SLATEExporter {
                 continue
             }
             let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+
+            // 音轨透传：把时间戳不晚于当前视频帧的音频样本按序写入（交织）
+            if let audioOut = audioReaderOutput, let audioIn = audioWriterInput {
+                while true {
+                    if pendingAudio == nil {
+                        pendingAudio = audioOut.copyNextSampleBuffer()
+                    }
+                    guard let audioSample = pendingAudio else { break }
+                    let audioPTS = CMSampleBufferGetPresentationTimeStamp(audioSample)
+                    guard CMTimeCompare(audioPTS, pts) <= 0 else { break }
+                    guard audioIn.isReadyForMoreMediaData else { break }
+                    audioIn.append(audioSample)
+                    pendingAudio = nil
+                }
+            }
 
             // 朝向：先按 transform 旋转，再平移到原点
             var image = CIImage(cvPixelBuffer: pixelBuffer)
@@ -246,6 +293,24 @@ final class SLATEExporter {
                 let p = min(1.0, Double(frameIndex) / totalFrames)
                 await MainActor.run { progress(p) }
             }
+        }
+
+        // 写完剩余音频，再结束两个输入
+        if let audioOut = audioReaderOutput, let audioIn = audioWriterInput {
+            while true {
+                if pendingAudio == nil {
+                    pendingAudio = audioOut.copyNextSampleBuffer()
+                }
+                guard let audioSample = pendingAudio else { break }
+                while !audioIn.isReadyForMoreMediaData {
+                    try? await Task.sleep(nanoseconds: 3_000_000)
+                    if writer.status == .failed { break }
+                }
+                if writer.status == .failed { break }
+                audioIn.append(audioSample)
+                pendingAudio = nil
+            }
+            audioIn.markAsFinished()
         }
 
         reader.cancelReading()

@@ -171,6 +171,36 @@ final class EditorModel: ObservableObject {
         }
     }
 
+
+    // MARK: HSL 八通道
+
+    /// 当前选中的 HSL 通道（纯界面状态，不参与渲染）。
+    @Published var hslSelectedBand: HSLBandID = .red
+
+    /// 选中通道的色相偏移（-1...1，满量程 ±30°）。
+    var hslHue: Double {
+        get { state.hsl[hslSelectedBand].hue }
+        set { state.hsl[hslSelectedBand].hue = newValue; requestRender() }
+    }
+    /// 选中通道的饱和度调整。
+    var hslSaturation: Double {
+        get { state.hsl[hslSelectedBand].saturation }
+        set { state.hsl[hslSelectedBand].saturation = newValue; requestRender() }
+    }
+    /// 选中通道的明度调整。
+    var hslLuminance: Double {
+        get { state.hsl[hslSelectedBand].luminance }
+        set { state.hsl[hslSelectedBand].luminance = newValue; requestRender() }
+    }
+    /// HSL 是否有任何通道被调整过。
+    var isHSLActive: Bool { !state.hsl.isNeutral }
+
+    /// 只重置当前选中通道。
+    func resetSelectedHSLBand() {
+        state.hsl[hslSelectedBand] = HSLBand()
+        requestRender()
+    }
+
     // MARK: LUT
 
     /// 当前生效的 LUT 展示名（nil 表示未套用）。
@@ -297,6 +327,12 @@ struct ContentView: View {
                     }
                     sliders
                         .padding(.top, 18)
+
+                    Divider()
+                        .overlay(Theme.line)
+                        .padding(.vertical, 16)
+
+                    hslSection
 
                     Divider()
                         .overlay(Theme.line)
@@ -527,6 +563,72 @@ struct ContentView: View {
     }
 
     // MARK: 色调分离
+
+    // MARK: HSL 八通道界面
+
+    private var hslSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("HSL 八通道")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.text)
+                    Text("按色相分别调整，中性灰不受影响")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.meta)
+                }
+                Spacer()
+                Button {
+                    model.resetSelectedHSLBand()
+                } label: {
+                    Text("重置通道")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(HSLBandID.allCases, id: \.self) { band in
+                        Button {
+                            model.hslSelectedBand = band
+                        } label: {
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(hslSwatch(band))
+                                    .frame(width: 8, height: 8)
+                                Text(band.displayName)
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .foregroundStyle(model.hslSelectedBand == band ? Theme.onAccent : Theme.text)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(
+                                model.hslSelectedBand == band ? Theme.accent : Theme.surface2,
+                                in: Capsule()
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            slider("色相", value: Binding(get: { model.hslHue }, set: { model.hslHue = $0 }),
+                   range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
+            slider("饱和度", value: Binding(get: { model.hslSaturation }, set: { model.hslSaturation = $0 }),
+                   range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
+            slider("明度", value: Binding(get: { model.hslLuminance }, set: { model.hslLuminance = $0 }),
+                   range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
+        }
+    }
+
+    /// 通道代表色（Engine 提供的 swatchRGB）。
+    private func hslSwatch(_ band: HSLBandID) -> Color {
+        let rgb = band.swatchRGB
+        return Color(red: rgb.red, green: rgb.green, blue: rgb.blue)
+    }
 
     private var splitToningSection: some View {
         VStack(alignment: .leading, spacing: 12) {
