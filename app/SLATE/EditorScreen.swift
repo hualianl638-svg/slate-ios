@@ -171,19 +171,25 @@ struct EditorScreen: View {
             .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 0.5))
     }
 
+    /// 灰片还原开关：点一下在「S-Log3 还原」与「709 直通」之间切换。
     private var pillToggle: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(model.isSLog3 ? Theme.accent : Theme.meta)
-                .frame(width: 5, height: 5)
-            Text(model.isSLog3 ? "S-Log3" : "709 预览")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(Theme.text)
+        Button {
+            model.isSLog3.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(model.isSLog3 ? Theme.accent : Theme.meta)
+                    .frame(width: 5, height: 5)
+                Text(model.isSLog3 ? "S-Log3" : "709 预览")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Theme.text)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.black.opacity(0.5), in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 0.5))
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(.black.opacity(0.5), in: Capsule())
-        .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 0.5))
+        .buttonStyle(.plain)
     }
 
     private var compareButton: some View {

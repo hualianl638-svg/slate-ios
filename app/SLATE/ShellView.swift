@@ -75,6 +75,11 @@ private struct EditorHost: View {
             didLoad = true
             model.sourceVideoURL = payload.videoURL
             model.load(image: payload.image, isVideo: payload.isVideo, colorInfo: nil)
+            // 图库导入路径没有做色彩探测，默认按 S-Log3 还原；
+            // 用户可在预览区点「709 预览」胶囊切回不做还原。
+            if payload.isVideo {
+                model.isSLog3 = true
+            }
         }
     }
 }
