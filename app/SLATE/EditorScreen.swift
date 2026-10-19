@@ -81,6 +81,13 @@ struct EditorScreen: View {
         }
         .onAppear { configurePlaybackIfNeeded() }
         .onChange(of: videoURL) { _, _ in configurePlaybackIfNeeded() }
+        .onChange(of: tool) { _, newValue in
+            // 编辑裁剪/蒙版时绕过裁剪，让画面完整显示，手柄才能映射到整幅图
+            var settings = model.cropMask
+            settings.bypassCrop = (newValue == .crop || newValue == .mask)
+            model.cropMask = settings
+            playback.refresh()
+        }
         .onDisappear {
             playback.teardown()
             didConfigurePlayback = false
@@ -165,6 +172,21 @@ struct EditorScreen: View {
                 }
             }
             .padding(10)
+
+            // 裁剪 / 蒙版：直接在画面上拖手柄
+            GeometryReader { _ in
+                Group {
+                    if tool == .crop {
+                        CropOverlay(settings: cropMaskBinding) {
+                            playback.refresh()
+                        }
+                    } else if tool == .mask, model.cropMask.maskKind != 0 {
+                        MaskOverlay(settings: cropMaskBinding) {
+                            playback.refresh()
+                        }
+                    }
+                }
+            }
 
             if model.isRendering {
                 ProgressView()
@@ -602,6 +624,13 @@ struct EditorScreen: View {
 
     // MARK: 裁剪 / 蒙版面板
 
+    private var cropMaskBinding: Binding<CropMaskSettings> {
+        Binding(
+            get: { model.cropMask },
+            set: { model.cropMask = $0 }
+        )
+    }
+
     private func setCrop<T>(_ keyPath: WritableKeyPath<CropMaskSettings, T>, _ value: T) {
         var settings = model.cropMask
         settings[keyPath: keyPath] = value
@@ -620,34 +649,53 @@ struct EditorScreen: View {
     private var cropPanel: some View {
         VStack(spacing: 12) {
             HStack(spacing: 6) {
-                ForEach(Array(["原始", "1:1", "4:3", "16:9", "9:16"].enumerated()), id: \.offset) { index, title in
-                    SLChip(title: title, isOn: model.cropMask.aspect == index, compact: true) {
-                        setCrop(\.aspect, index)
+                ForEach(Array(["自由", "1:1", "4:3", "16:9", "9:16"].enumerated()), id: \.offset) { index, title in
+                    SLChip(title: title, isOn: model.cropMask.aspectLock == index, compact: true) {
+                        var settings = model.cropMask
+                        settings.aspectLock = index
+                        if let ratio = settings.aspectRatio {
+                            // 比例锁定后，按当前框中心重新拟合
+                            let centerX = settings.cropX + settings.cropWidth / 2
+                            let centerY = settings.cropY + settings.cropHeight / 2
+                            var width = 1.0
+                            var height = 1.0 / Double(ratio)
+                            if height > 1 { height = 1; width = Double(ratio) }
+                            width = min(0.9, width)
+                            height = min(0.9, height)
+                            settings.cropX = min(max(centerX - width / 2, 0), 1 - width)
+                            settings.cropY = min(max(centerY - height / 2, 0), 1 - height)
+                            settings.cropWidth = width
+                            settings.cropHeight = height
+                        }
+                        model.cropMask = settings
+                        playback.refresh()
                     }
                 }
                 Spacer(minLength: 0)
             }
 
-            sliderRow("缩放", cropDouble(\.zoom), 1...3) { String(format: "%.2fx", $0) }
-            sliderRow("左右", cropDouble(\.offsetX), -1...1) { String(format: "%+.2f", $0) }
-            sliderRow("上下", cropDouble(\.offsetY), -1...1) { String(format: "%+.2f", $0) }
-
-            HStack {
+            HStack(spacing: 10) {
                 SLTextButton(title: "旋转 90°") {
                     setCrop(\.turns, (model.cropMask.turns + 1) % 4)
                 }
-                Spacer()
-                SLTextButton(title: "复位裁剪") {
+                SLTextButton(title: "复位") {
                     var settings = model.cropMask
-                    settings.aspect = 0
-                    settings.zoom = 1
-                    settings.offsetX = 0
-                    settings.offsetY = 0
+                    settings.cropX = 0
+                    settings.cropY = 0
+                    settings.cropWidth = 1
+                    settings.cropHeight = 1
+                    settings.aspectLock = 0
                     settings.turns = 0
                     model.cropMask = settings
                     playback.refresh()
                 }
+                Spacer()
             }
+
+            Text("拖动画面内边框移动，拖四角改大小")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.meta)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -656,25 +704,21 @@ struct EditorScreen: View {
             HStack(spacing: 6) {
                 ForEach(Array(["关闭", "线性", "径向"].enumerated()), id: \.offset) { index, title in
                     SLChip(title: title, isOn: model.cropMask.maskKind == index, compact: true) {
-                        setCrop(\.maskKind, index)
+                        var settings = model.cropMask
+                        settings.maskKind = index
+                        model.cropMask = settings
+                        playback.refresh()
                     }
                 }
                 Spacer(minLength: 0)
             }
 
             if model.cropMask.maskKind == 0 {
-                Text("选择线性或径向蒙版后，只有蒙版区域内的调节会生效。")
+                Text("选择线性或径向后，拖动画面上的橙色手柄调整位置与范围。")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.meta)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                sliderRow("中心 X", cropDouble(\.centerX), 0...1) { String(format: "%.2f", $0) }
-                sliderRow("中心 Y", cropDouble(\.centerY), 0...1) { String(format: "%.2f", $0) }
-                if model.cropMask.maskKind == 1 {
-                    sliderRow("角度", cropDouble(\.angle), 0...360) { String(format: "%.0f°", $0) }
-                } else {
-                    sliderRow("半径", cropDouble(\.radius), 0.05...1) { String(format: "%.2f", $0) }
-                }
                 sliderRow("羽化", cropDouble(\.feather), 0...1) { String(format: "%.2f", $0) }
                 sliderRow("强度", cropDouble(\.strength), 0...1) { String(format: "%.2f", $0) }
 
@@ -690,6 +734,13 @@ struct EditorScreen: View {
                     .labelsHidden()
                     .tint(Theme.accent)
                 }
+
+                Text(model.cropMask.maskKind == 1
+                     ? "拖动橙点移动分隔线中心，拖线段端点改角度"
+                     : "拖动中心橙点移动，拖右侧橙点改半径")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.meta)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -703,6 +754,10 @@ struct EditorScreen: View {
                 playback.refresh()
             }
             SLPrimaryButton(title: videoURL != nil ? "导出" : "导出 JPG") {
+                // 旁路只用于编辑预览，导出必须带上真实裁剪
+                var settings = model.cropMask
+                settings.bypassCrop = false
+                model.cropMask = settings
                 showExport = true
             }
         }

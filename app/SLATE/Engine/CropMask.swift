@@ -2,53 +2,66 @@
 //  CropMask.swift
 //  SLATE
 //
-//  裁剪与蒙版：作为 EditState 的一部分，保证照片/视频/导出走同一套管线。
+//  裁剪与蒙版：作为 EditState 的一部分，让照片/视频/导出共用同一套设置。
+//
+//  裁剪框用**归一化矩形**（0...1，相对旋转后的源图）表示，
+//  这样预览上拖手柄时可以直接把位移换算成比例，不需要知道像素尺寸。
 //
 
 import CoreImage
 import Foundation
 
-/// 裁剪与蒙版设置。
 public struct CropMaskSettings: Equatable, Codable, Sendable {
 
-    /// 裁剪比例：0 原始 / 1 1:1 / 2 4:3 / 3 16:9 / 4 9:16。
-    public var aspect: Int = 0
-    /// 缩放 1...3（在选定比例内进一步裁切）。
-    public var zoom: Double = 1
-    /// 画面中心偏移 -1...1。
-    public var offsetX: Double = 0
-    public var offsetY: Double = 0
-    /// 旋转 90° 的次数 0...3。
+    // MARK: 裁剪（归一化矩形）
+    public var cropX: Double = 0
+    public var cropY: Double = 0
+    public var cropWidth: Double = 1
+    public var cropHeight: Double = 1
+    /// 比例锁定：0 自由 / 1 → 1:1 / 2 → 4:3 / 3 → 16:9 / 4 → 9:16。
+    public var aspectLock: Int = 0
+    /// 旋转 90° 次数 0...3。
     public var turns: Int = 0
+    /// 编辑裁剪时临时绕过裁剪，让预览显示完整画面（导出前会复位）。
+    public var bypassCrop: Bool = false
 
-    /// 蒙版类型：0 关 / 1 线性 / 2 径向。
+    // MARK: 蒙版
+    /// 0 关 / 1 线性 / 2 径向。
     public var maskKind: Int = 0
     public var centerX: Double = 0.5
     public var centerY: Double = 0.5
-    /// 线性蒙版角度（度）。
+    /// 线性角度（度）。
     public var angle: Double = 90
-    /// 径向蒙版半径 0.05...1（相对短边）。
+    /// 径向半径（相对短边，0...1）。
     public var radius: Double = 0.55
-    /// 羽化 0...1。
     public var feather: Double = 0.35
-    /// 强度 0...1。
     public var strength: Double = 1
     public var invert: Bool = false
 
     public init() {}
 
     public var isCropActive: Bool {
-        aspect != 0 || zoom > 1.001 || abs(offsetX) > 0.001 || abs(offsetY) > 0.001 || turns % 4 != 0
+        cropWidth < 0.999 || cropHeight < 0.999
+            || cropX > 0.001 || cropY > 0.001
+            || turns % 4 != 0
     }
 
-    public var isMaskActive: Bool {
-        maskKind != 0 && strength > 0.001
+    public var isMaskActive: Bool { maskKind != 0 && strength > 0.001 }
+
+    /// 比例锁定的目标宽高比（nil = 自由）。
+    public var aspectRatio: CGFloat? {
+        switch aspectLock {
+        case 1: return 1
+        case 2: return 4.0 / 3.0
+        case 3: return 16.0 / 9.0
+        case 4: return 9.0 / 16.0
+        default: return nil
+        }
     }
 }
 
 enum CropMask {
 
-    /// 按设置裁剪（先旋转、再按比例裁、最后把原点搬回 0）。
     static func crop(_ image: CIImage, settings: CropMaskSettings) -> CIImage {
         var source = image
         let turns = ((settings.turns % 4) + 4) % 4
@@ -56,43 +69,19 @@ enum CropMask {
             let orientations: [CGImagePropertyOrientation] = [.up, .right, .down, .left]
             source = source.oriented(orientations[turns])
         }
+        guard !settings.bypassCrop else { return source }
         guard settings.isCropActive else { return source }
 
         let extent = source.extent
         guard extent.width > 1, extent.height > 1 else { return source }
 
-        var targetAspect: CGFloat
-        switch settings.aspect {
-        case 1: targetAspect = 1
-        case 2: targetAspect = 4.0 / 3.0
-        case 3: targetAspect = 16.0 / 9.0
-        case 4: targetAspect = 9.0 / 16.0
-        default: targetAspect = extent.width / extent.height
-        }
+        let rect = CGRect(
+            x: extent.minX + extent.width * CGFloat(min(max(settings.cropX, 0), 1)),
+            y: extent.minY + extent.height * CGFloat(min(max(settings.cropY, 0), 1)),
+            width: extent.width * CGFloat(min(max(settings.cropWidth, 0.02), 1)),
+            height: extent.height * CGFloat(min(max(settings.cropHeight, 0.02), 1))
+        ).integral.intersection(extent)
 
-        var width = extent.width
-        var height = extent.height
-        if width / height > targetAspect {
-            width = height * targetAspect
-        } else {
-            height = width / targetAspect
-        }
-        let zoom = min(max(settings.zoom, 1), 3)
-        width /= CGFloat(zoom)
-        height /= CGFloat(zoom)
-
-        let maxShiftX = (extent.width - width) / 2
-        let maxShiftY = (extent.height - height) / 2
-        let centerX = extent.midX + CGFloat(min(max(settings.offsetX, -1), 1)) * maxShiftX
-        let centerY = extent.midY + CGFloat(min(max(settings.offsetY, -1), 1)) * maxShiftY
-
-        var rect = CGRect(
-            x: centerX - width / 2,
-            y: centerY - height / 2,
-            width: width,
-            height: height
-        ).integral
-        rect = rect.intersection(extent)
         guard rect.width > 1, rect.height > 1 else { return source }
 
         return source
@@ -100,7 +89,6 @@ enum CropMask {
             .transformed(by: CGAffineTransform(translationX: -rect.origin.x, y: -rect.origin.y))
     }
 
-    /// 用蒙版把"调节后"和"调节前（已裁剪）"混合起来。
     static func blend(adjusted: CIImage, original: CIImage, settings: CropMaskSettings) -> CIImage {
         guard settings.isMaskActive else { return adjusted }
         let extent = original.extent
@@ -113,48 +101,41 @@ enum CropMask {
 
         var mask: CIImage
         if settings.maskKind == 1 {
-            // 线性：沿角度方向的明暗渐变
             let angle = CGFloat(settings.angle) * .pi / 180
             let span = max(extent.width, extent.height) * 0.75
             let dx = cos(angle) * span
             let dy = sin(angle) * span
-            let filter = CIFilter(name: "CILinearGradient", parameters: [
+            mask = CIFilter(name: "CILinearGradient", parameters: [
                 "inputPoint0": CIVector(x: center.x + dx, y: center.y + dy),
                 "inputPoint1": CIVector(x: center.x - dx, y: center.y - dy),
                 "inputColor0": CIColor(red: 1, green: 1, blue: 1, alpha: 1),
                 "inputColor1": CIColor(red: 0, green: 0, blue: 0, alpha: 1),
-            ])
-            mask = filter?.outputImage ?? CIImage(color: .white)
+            ])?.outputImage ?? CIImage(color: .white)
         } else {
-            // 径向：中心亮、边缘暗
-            let base = min(extent.width, extent.height) * 0.5 * CGFloat(min(max(settings.radius, 0.05), 1))
+            let base = min(extent.width, extent.height) * 0.5
+                * CGFloat(min(max(settings.radius, 0.02), 1))
             let feather = CGFloat(min(max(settings.feather, 0), 1))
-            let filter = CIFilter(name: "CIRadialGradient", parameters: [
+            mask = CIFilter(name: "CIRadialGradient", parameters: [
                 "inputCenter": CIVector(x: center.x, y: center.y),
                 "inputRadius0": base * max(0.01, 1 - feather),
                 "inputRadius1": base,
                 "inputColor0": CIColor(red: 1, green: 1, blue: 1, alpha: 1),
                 "inputColor1": CIColor(red: 0, green: 0, blue: 0, alpha: 1),
-            ])
-            mask = filter?.outputImage ?? CIImage(color: .white)
+            ])?.outputImage ?? CIImage(color: .white)
         }
 
         mask = mask.cropped(to: extent)
-
-        // 羽化（线性也要能柔化边缘）
         if settings.feather > 0.001 {
             mask = mask.clampedToExtent()
                 .applyingFilter("CIGaussianBlur", parameters: [
-                    kCIInputRadiusKey: settings.feather * CGFloat(min(extent.width, extent.height)) * 0.12,
+                    kCIInputRadiusKey: settings.feather * CGFloat(min(extent.width, extent.height)) * 0.1,
                 ])
                 .cropped(to: extent)
         }
-
         if settings.invert {
             mask = mask.applyingFilter("CIColorInvert")
         }
 
-        // 强度：压低蒙版亮度 = 向原图方向回退
         let strength = CGFloat(min(max(settings.strength, 0), 1))
         mask = mask.applyingFilter("CIColorMatrix", parameters: [
             "inputRVector": CIVector(x: strength, y: 0, z: 0, w: 0),
