@@ -213,7 +213,7 @@ struct EditorScreen: View {
     }
 
     private var badge: some View {
-        Text(videoURL != nil ? "S-LOG3" : "RAW")
+        Text(videoURL != nil ? (model.isSLog3 ? "S-LOG3" : "709") : "照片")
             .font(.system(size: 9, weight: .bold))
             .tracking(0.4)
             .foregroundStyle(Theme.text)

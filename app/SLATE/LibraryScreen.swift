@@ -19,6 +19,10 @@ struct LibraryPayload {
     var videoURL: URL?
     var title: String
     var subtitle: String
+    /// 是否判定为对数灰片（S-Log3 等）。照片恒为 false。
+    var isLogLikely: Bool = false
+    /// 识别说明，用于界面提示（如「10bit ITU_R_709_2 · 灰片」）。
+    var detectionNote: String?
 }
 
 /// 图库条目。
@@ -50,12 +54,32 @@ final class LibraryStore: ObservableObject {
                     throw LibraryError.unsupported
                 }
                 let poster = try await Self.poster(for: movie.url)
+                let info = try? await VideoProbe.inspect(url: movie.url)
+                let detection = await VideoProbe.detectLogProfile(url: movie.url)
+
+                var subtitleParts: [String] = []
+                if let info {
+                    subtitleParts.append("\(info.width)×\(info.height)")
+                    subtitleParts.append("\(Int(info.fps.rounded()))p")
+                    if let depth = info.bitDepth { subtitleParts.append("\(depth)bit") }
+                    subtitleParts.append(info.codec)
+                } else {
+                    subtitleParts.append(Self.shortSize(of: movie.url))
+                }
+
+                var note: String?
+                if let detection {
+                    note = "\(detection.hint) · \(detection.isLikelyLog ? "灰片" : "709")"
+                }
+
                 let payload = LibraryPayload(
                     image: poster,
                     isVideo: true,
                     videoURL: movie.url,
                     title: movie.url.deletingPathExtension().lastPathComponent,
-                    subtitle: "视频 · \(Self.shortSize(of: movie.url))"
+                    subtitle: subtitleParts.joined(separator: " · "),
+                    isLogLikely: detection?.isLikelyLog ?? false,
+                    detectionNote: note
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
             } else {
@@ -275,7 +299,7 @@ struct LibraryScreen: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(alignment: .topLeading) {
-                    Text(item.isVideo ? "视频" : "照片")
+                    Text(item.isVideo ? (item.payload.isLogLikely ? "LOG" : "709") : "照片")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(Theme.text)
                         .padding(.horizontal, 5)

@@ -70,8 +70,9 @@ private struct EditorHost: View {
         model.sourceVideoURL = payload.videoURL
         model.load(image: payload.image, isVideo: payload.isVideo, colorInfo: nil)
         if payload.isVideo {
-            // 图库导入未做色彩探测，默认按 S-Log3 还原；编辑器里有开关可关。
-            model.isSLog3 = true
+            // 用像素统计的识别结果决定是否套还原 LUT：
+            // 误判成灰片会整体发灰发平，比漏判更糟，所以按检测结论来。
+            model.isSLog3 = payload.isLogLikely
         }
         _model = StateObject(wrappedValue: model)
     }
