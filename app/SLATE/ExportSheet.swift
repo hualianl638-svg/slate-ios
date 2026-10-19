@@ -134,12 +134,12 @@ struct ExportSheet: View {
             if model.sourceVideoURL == nil {
                 return "实况图需要视频素材。请导入视频后再导出。"
             }
-            return "截取视频居中的 3 秒：中点那一帧作为静帧、这段视频作为配对视频，成对写入相册（相册里会显示 LIVE 角标）。本期静帧与配对视频均不带音轨。"
+            return "截取视频居中的 3 秒：中点那一帧作为静帧、这段视频作为配对视频，成对写入相册（相册里会显示 LIVE 角标）。静帧与配对视频会保留原音轨。"
         case .videoHEVC, .videoH264:
             if model.sourceVideoURL == nil {
                 return "当前素材来自照片，没有视频轨道。请导入视频后再导出。"
             }
-            return "逐帧重新调色后用 \(kind.rawValue.contains("HEVC") ? "HEVC" : "H.264") 编码，写入相册。本期暂不透传音轨。"
+            return "逐帧重新调色后用 \(kind.rawValue.contains("HEVC") ? "HEVC" : "H.264") 编码，写入相册，并保留原音轨。"
         }
     }
 
