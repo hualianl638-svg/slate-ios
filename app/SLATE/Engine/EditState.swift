@@ -77,6 +77,12 @@ public struct LUTApplication: Equatable, Codable, Hashable, Sendable {
 /// · 新增字段时必须在 `init(from:)` 里给回落默认值，保证旧工程文件仍能打开。
 public struct EditState: Identifiable, Equatable, Codable, Sendable {
 
+    /// 裁剪与蒙版。
+    ///
+    /// 放在 EditState 里而不是单独持有，是为了让照片预览、视频逐帧预览、
+    /// 导出三条管线自动共用同一份设置（否则三处会不一致）。
+    public var cropMask: CropMaskSettings = CropMaskSettings()
+
     /// 当前序列化版本。新增字段时递增，供迁移使用。
     public static let currentSchemaVersion = 1
 

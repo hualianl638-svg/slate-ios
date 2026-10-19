@@ -175,6 +175,17 @@ final class EditorModel: ObservableObject {
     // MARK: HSL 八通道
 
     /// 当前选中的 HSL 通道（纯界面状态，不参与渲染）。
+    // MARK: 裁剪 / 蒙版
+
+    /// 裁剪与蒙版设置（写入即触发重渲）。
+    var cropMask: CropMaskSettings {
+        get { state.cropMask }
+        set {
+            state.cropMask = newValue
+            requestRender()
+        }
+    }
+
     @Published var hslSelectedBand: HSLBandID = .red
 
     /// 选中通道的色相偏移（-1...1，满量程 ±30°）。

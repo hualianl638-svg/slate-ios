@@ -40,6 +40,8 @@ struct EditorScreen: View {
         case hsl = "HSL"
         case split = "色调分离"
         case lut = "LUT"
+        case crop = "裁剪"
+        case mask = "蒙版"
 
         var id: String { rawValue }
 
@@ -50,6 +52,8 @@ struct EditorScreen: View {
             case .hsl: return "eyedropper.halffull"
             case .split: return "circle.hexagongrid.fill"
             case .lut: return "cube.transparent"
+            case .crop: return "crop"
+            case .mask: return "circle.dashed"
             }
         }
     }
@@ -446,6 +450,8 @@ struct EditorScreen: View {
         case .hsl: hslPanel
         case .split: splitPanel
         case .lut: lutPanel
+        case .crop: cropPanel
+        case .mask: maskPanel
         }
     }
 
@@ -591,6 +597,100 @@ struct EditorScreen: View {
 
             sliderRow("LUT 强度", Binding(get: { model.lutIntensity }, set: { model.lutIntensity = $0 }),
                       0...1, { String(format: "%.2f", $0) })
+        }
+    }
+
+    // MARK: 裁剪 / 蒙版面板
+
+    private func setCrop<T>(_ keyPath: WritableKeyPath<CropMaskSettings, T>, _ value: T) {
+        var settings = model.cropMask
+        settings[keyPath: keyPath] = value
+        model.cropMask = settings
+        // 视频预览走播放器帧，必须显式刷新
+        playback.refresh()
+    }
+
+    private func cropDouble(_ keyPath: WritableKeyPath<CropMaskSettings, Double>) -> Binding<Double> {
+        Binding(
+            get: { model.cropMask[keyPath: keyPath] },
+            set: { setCrop(keyPath, $0) }
+        )
+    }
+
+    private var cropPanel: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 6) {
+                ForEach(Array(["原始", "1:1", "4:3", "16:9", "9:16"].enumerated()), id: \.offset) { index, title in
+                    SLChip(title: title, isOn: model.cropMask.aspect == index, compact: true) {
+                        setCrop(\.aspect, index)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+
+            sliderRow("缩放", cropDouble(\.zoom), 1...3) { String(format: "%.2fx", $0) }
+            sliderRow("左右", cropDouble(\.offsetX), -1...1) { String(format: "%+.2f", $0) }
+            sliderRow("上下", cropDouble(\.offsetY), -1...1) { String(format: "%+.2f", $0) }
+
+            HStack {
+                SLTextButton(title: "旋转 90°") {
+                    setCrop(\.turns, (model.cropMask.turns + 1) % 4)
+                }
+                Spacer()
+                SLTextButton(title: "复位裁剪") {
+                    var settings = model.cropMask
+                    settings.aspect = 0
+                    settings.zoom = 1
+                    settings.offsetX = 0
+                    settings.offsetY = 0
+                    settings.turns = 0
+                    model.cropMask = settings
+                    playback.refresh()
+                }
+            }
+        }
+    }
+
+    private var maskPanel: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 6) {
+                ForEach(Array(["关闭", "线性", "径向"].enumerated()), id: \.offset) { index, title in
+                    SLChip(title: title, isOn: model.cropMask.maskKind == index, compact: true) {
+                        setCrop(\.maskKind, index)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+
+            if model.cropMask.maskKind == 0 {
+                Text("选择线性或径向蒙版后，只有蒙版区域内的调节会生效。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.meta)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                sliderRow("中心 X", cropDouble(\.centerX), 0...1) { String(format: "%.2f", $0) }
+                sliderRow("中心 Y", cropDouble(\.centerY), 0...1) { String(format: "%.2f", $0) }
+                if model.cropMask.maskKind == 1 {
+                    sliderRow("角度", cropDouble(\.angle), 0...360) { String(format: "%.0f°", $0) }
+                } else {
+                    sliderRow("半径", cropDouble(\.radius), 0.05...1) { String(format: "%.2f", $0) }
+                }
+                sliderRow("羽化", cropDouble(\.feather), 0...1) { String(format: "%.2f", $0) }
+                sliderRow("强度", cropDouble(\.strength), 0...1) { String(format: "%.2f", $0) }
+
+                HStack {
+                    Text("反向蒙版")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.text)
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { model.cropMask.invert },
+                        set: { setCrop(\.invert, $0) }
+                    ))
+                    .labelsHidden()
+                    .tint(Theme.accent)
+                }
+            }
         }
     }
 

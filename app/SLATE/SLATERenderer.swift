@@ -290,7 +290,9 @@ final class SLATERenderer {
 
     /// 渲染主入口。
     func processedImage(_ image: CIImage, state: EditState, lut: LUT3D?) -> CIImage {
-        var current = image
+        // 裁剪（含旋转）放在整条链最前面；蒙版在链尾用"裁剪后的原图"做混合。
+        let croppedSource = CropMask.crop(image, settings: state.cropMask)
+        var current = croppedSource
         let a = state.adjustments
 
         // ---- 1. 归一化到线性工作域 ----
@@ -410,7 +412,11 @@ final class SLATERenderer {
             current = applyLUT(current, lut: lut, intensity: state.lut.intensity)
         }
 
-        return current
+        return CropMask.blend(
+            adjusted: current,
+            original: croppedSource,
+            settings: state.cropMask
+        )
     }
 
     /// 渲染为 CGImage（预览与照片导出用）。
