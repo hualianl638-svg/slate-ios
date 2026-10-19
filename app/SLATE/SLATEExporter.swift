@@ -111,14 +111,10 @@ final class SLATEExporter {
         let asset = AVURLAsset(url: sourceURL, options: [
             AVURLAssetPreferPreciseDurationAndTimingKey: true,
         ])
-
         guard let track = try await asset.loadTracks(withMediaType: .video).first else {
             throw ExportError.noVideoTrack
         }
-
-        // 音轨（可选）：有就透传，没有就静默地只导画面
         let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
-        let audioTrack = audioTracks.first
 
         let naturalSize = try await track.load(.naturalSize)
         let transform = try await track.load(.preferredTransform)
@@ -126,40 +122,35 @@ final class SLATEExporter {
         let nominalFPS = try await track.load(.nominalFrameRate)
         let frameRate = nominalFPS > 0 ? Double(nominalFPS) : 30.0
 
-        // 旋转后的实际显示尺寸，并取偶数
-        let rotatedRect = CGRect(origin: .zero, size: naturalSize).applying(transform)
-        let displayWidth = abs(rotatedRect.width)
-        let displayHeight = abs(rotatedRect.height)
-        var outWidth = Int(displayWidth.rounded())
-        var outHeight = Int(displayHeight.rounded())
+        // 旋转后的显示尺寸，取偶数（H.264/HEVC 的硬性要求）
+        let rotated = CGRect(origin: .zero, size: naturalSize).applying(transform)
+        var outWidth = Int(abs(rotated.width).rounded())
+        var outHeight = Int(abs(rotated.height).rounded())
         if outWidth % 2 != 0 { outWidth -= 1 }
         if outHeight % 2 != 0 { outHeight -= 1 }
         guard outWidth > 1, outHeight > 1 else {
             throw ExportError.writerFailed("素材尺寸异常（\(outWidth)×\(outHeight)）")
         }
 
-        // 输出文件
         let outURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SLATE-\(Self.stamp()).mov")
         try? FileManager.default.removeItem(at: outURL)
 
-        // Reader
+        // ---- Reader ----
         let reader = try AVAssetReader(asset: asset)
-        let readerOutput = AVAssetReaderTrackOutput(
-            track: track,
-            outputSettings: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            ]
-        )
+        let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+        ])
         readerOutput.alwaysCopiesSampleData = false
         guard reader.canAdd(readerOutput) else {
-            throw ExportError.readerFailed("无法添加读取输出")
+            throw ExportError.readerFailed("无法添加视频读取输出")
         }
         reader.add(readerOutput)
+        if let timeRange { reader.timeRange = timeRange }
 
-        // 音频读取：`outputSettings: nil` = 透传原始压缩样本，不重新编码
+        // 音频透传（outputSettings: nil 表示不重新编码）
         var audioReaderOutput: AVAssetReaderTrackOutput?
-        if let audioTrack {
+        if let audioTrack = audioTracks.first {
             let out = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
             out.alwaysCopiesSampleData = false
             if reader.canAdd(out) {
@@ -168,16 +159,12 @@ final class SLATEExporter {
             }
         }
 
-        // 只读指定时间窗（实况图截取 3 秒）
-        if let timeRange {
-            reader.timeRange = timeRange
-        }
-
-        // Writer
+        // ---- Writer ----
         let writer = try AVAssetWriter(outputURL: outURL, fileType: .mov)
         let codec: AVVideoCodecType = settings.kind == .videoH264 ? .h264 : .hevc
         var compression: [String: Any] = [
             AVVideoAverageBitRateKey: settings.bitrate,
+            AVVideoExpectedSourceFrameRateKey: Int(frameRate.rounded()),
         ]
         if settings.kind == .videoH264 {
             compression[AVVideoProfileLevelKey] = AVVideoProfileLevelH264HighAutoLevel
@@ -200,11 +187,10 @@ final class SLATEExporter {
             ]
         )
         guard writer.canAdd(writerInput) else {
-            throw ExportError.writerFailed("无法添加写入输入")
+            throw ExportError.writerFailed("无法添加视频写入输入")
         }
         writer.add(writerInput)
 
-        // 音频写入：同样 `outputSettings: nil` 走透传，避免重编码损失与额外耗时
         var audioWriterInput: AVAssetWriterInput?
         if audioReaderOutput != nil {
             let input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
@@ -213,7 +199,6 @@ final class SLATEExporter {
                 writer.add(input)
                 audioWriterInput = input
             } else {
-                // 容器不接受这条音轨：放弃音频，但不要因此让整个导出失败
                 audioReaderOutput = nil
             }
         }
@@ -224,128 +209,127 @@ final class SLATEExporter {
         guard writer.startWriting() else {
             throw ExportError.writerFailed(writer.error?.localizedDescription ?? "startWriting 失败")
         }
-        writer.startSession(atSourceTime: .zero)
+        // 会话起点取素材的真实起点：实况图只导中间 3 秒时，
+        // PTS 不是从 0 开始，直接 startSession(.zero) 会在片头留一段空白。
+        writer.startSession(atSourceTime: timeRange?.start ?? .zero)
 
         let effectiveDuration = timeRange.map { CMTimeGetSeconds($0.duration) }
             ?? CMTimeGetSeconds(duration)
         let totalFrames = max(1.0, effectiveDuration * frameRate)
-        var frameIndex = 0
         let outputSize = CGSize(width: outWidth, height: outHeight)
-        // 音频单样本预读缓冲：`copyNextSampleBuffer` 取出的样本无法"放回"，
-        // 所以用一份 pending 做时间戳对齐，保证音视频按时间交织写入。
-        var pendingAudio: CMSampleBuffer?
 
-        // 逐帧处理
-        while let sample = readerOutput.copyNextSampleBuffer() {
-            // 背压：等 writer 就绪
-            while !writerInput.isReadyForMoreMediaData {
-                try? await Task.sleep(nanoseconds: 3_000_000)
-                if writer.status == .failed { break }
-            }
-            if writer.status == .failed {
-                break
+        let queue = DispatchQueue(label: "com.slate.export.video", qos: .userInitiated)
+        let relay = ExportProgressRelay(callback: progress)
+
+        // ---- 官方推荐的非实时写法：requestMediaDataWhenReady ----
+        //
+        // 早期版本用 `while !isReadyForMoreMediaData { try? await Task.sleep }` 忙等：
+        // `try?` 会吞掉取消异常，一旦任务被取消 sleep 立刻返回，循环变成空转，
+        // 表现为"进度卡住不动"。这里改由 AVFoundation 在就绪时回调，不再轮询。
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            var frameIndex = 0
+            var pendingAudio: CMSampleBuffer?
+            var resumed = false
+
+            func finishWithError(_ error: Error) {
+                guard !resumed else { return }
+                resumed = true
+                writerInput.markAsFinished()
+                audioWriterInput?.markAsFinished()
+                writer.finishWriting {
+                    continuation.resume(throwing: error)
+                }
             }
 
-            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sample) else {
-                frameIndex += 1
-                continue
-            }
-            let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-
-            // 音轨透传：把时间戳不晚于当前视频帧的音频样本按序写入（交织）
-            if let audioOut = audioReaderOutput, let audioIn = audioWriterInput {
-                while true {
-                    if pendingAudio == nil {
-                        pendingAudio = audioOut.copyNextSampleBuffer()
+            writerInput.requestMediaDataWhenReady(on: queue) {
+                while writerInput.isReadyForMoreMediaData {
+                    guard let sample = readerOutput.copyNextSampleBuffer() else {
+                        // 视频读完：排空音频后收尾
+                        writerInput.markAsFinished()
+                        if let audioOut = audioReaderOutput, let audioIn = audioWriterInput {
+                            while let audioSample = pendingAudio ?? audioOut.copyNextSampleBuffer() {
+                                pendingAudio = nil
+                                guard audioIn.isReadyForMoreMediaData else { break }
+                                audioIn.append(audioSample)
+                            }
+                            audioIn.markAsFinished()
+                        }
+                        writer.finishWriting {
+                            if resumed { return }
+                            resumed = true
+                            if writer.status == .completed {
+                                relay.report(1.0)
+                                continuation.resume()
+                            } else {
+                                continuation.resume(throwing: ExportError.writerFailed(
+                                    writer.error?.localizedDescription ?? "编码未完成"
+                                ))
+                            }
+                        }
+                        return
                     }
-                    guard let audioSample = pendingAudio else { break }
-                    let audioPTS = CMSampleBufferGetPresentationTimeStamp(audioSample)
-                    guard CMTimeCompare(audioPTS, pts) <= 0 else { break }
-                    guard audioIn.isReadyForMoreMediaData else { break }
-                    audioIn.append(audioSample)
-                    pendingAudio = nil
+
+                    let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+
+                    // 音轨按时间戳交织写入
+                    if let audioOut = audioReaderOutput, let audioIn = audioWriterInput {
+                        while true {
+                            if pendingAudio == nil {
+                                pendingAudio = audioOut.copyNextSampleBuffer()
+                            }
+                            guard let audioSample = pendingAudio else { break }
+                            let audioPTS = CMSampleBufferGetPresentationTimeStamp(audioSample)
+                            guard CMTimeCompare(audioPTS, pts) <= 0 else { break }
+                            guard audioIn.isReadyForMoreMediaData else { break }
+                            audioIn.append(audioSample)
+                            pendingAudio = nil
+                        }
+                    }
+
+                    guard let sourceBuffer = CMSampleBufferGetImageBuffer(sample) else { continue }
+                    guard let pool = adaptor.pixelBufferPool else {
+                        finishWithError(ExportError.pixelBufferFailed)
+                        return
+                    }
+                    var destination: CVPixelBuffer?
+                    CVPixelBufferPoolCreatePixelBuffer(nil, pool, &destination)
+                    guard let outBuffer = destination else {
+                        finishWithError(ExportError.pixelBufferFailed)
+                        return
+                    }
+
+                    var image = CIImage(cvPixelBuffer: sourceBuffer)
+                    if !transform.isIdentity {
+                        image = image.transformed(by: transform)
+                        image = image.transformed(by: CGAffineTransform(
+                            translationX: -image.extent.origin.x,
+                            y: -image.extent.origin.y
+                        ))
+                    }
+
+                    // 直接渲染进目标缓冲：避免 createCGImage 的整幅拷贝
+                    SLATERenderer.shared.render(
+                        image, state: state, lut: lut,
+                        into: outBuffer, size: outputSize
+                    )
+
+                    if !adaptor.append(outBuffer, withPresentationTime: pts) {
+                        finishWithError(ExportError.writerFailed(
+                            writer.error?.localizedDescription ?? "写入帧失败"
+                        ))
+                        return
+                    }
+
+                    frameIndex += 1
+                    if frameIndex % 3 == 0 {
+                        relay.report(min(1.0, Double(frameIndex) / totalFrames))
+                    }
                 }
             }
-
-            // 朝向：先按 transform 旋转，再平移到原点
-            var image = CIImage(cvPixelBuffer: pixelBuffer)
-            if !transform.isIdentity {
-                image = image.transformed(by: transform)
-                image = image.transformed(by: CGAffineTransform(
-                    translationX: -image.extent.origin.x,
-                    y: -image.extent.origin.y
-                ))
-            }
-
-            guard let cg = renderer.render(image, state: state, lut: lut) else {
-                frameIndex += 1
-                continue
-            }
-            guard let outBuffer = makePixelBuffer(from: cg,
-                                                  size: outputSize,
-                                                  pool: adaptor.pixelBufferPool) else {
-                throw ExportError.pixelBufferFailed
-            }
-            adaptor.append(outBuffer, withPresentationTime: pts)
-
-            frameIndex += 1
-            if frameIndex % 6 == 0 {
-                let p = min(1.0, Double(frameIndex) / totalFrames)
-                await MainActor.run { progress(p) }
-            }
-        }
-
-        // 写完剩余音频，再结束两个输入
-        if let audioOut = audioReaderOutput, let audioIn = audioWriterInput {
-            while true {
-                if pendingAudio == nil {
-                    pendingAudio = audioOut.copyNextSampleBuffer()
-                }
-                guard let audioSample = pendingAudio else { break }
-                while !audioIn.isReadyForMoreMediaData {
-                    try? await Task.sleep(nanoseconds: 3_000_000)
-                    if writer.status == .failed { break }
-                }
-                if writer.status == .failed { break }
-                audioIn.append(audioSample)
-                pendingAudio = nil
-            }
-            audioIn.markAsFinished()
         }
 
         reader.cancelReading()
-        writerInput.markAsFinished()
-
-        await writer.finishWriting()
-        await MainActor.run { progress(1.0) }
-
-        if writer.status != .completed {
-            throw ExportError.writerFailed(writer.error?.localizedDescription ?? "未知原因")
-        }
         return outURL
-    }
-
-    /// 把导出的视频写入相册。
-    @discardableResult
-    func saveVideoToLibrary(fileURL: URL) async throws -> String {
-        try await ensureAddOnlyAccess()
-        let box = Box<String?>(nil)
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            PHPhotoLibrary.shared().performChanges {
-                let request = PHAssetCreationRequest.forAsset()
-                let options = PHAssetResourceCreationOptions()
-                options.shouldMoveFile = false
-                request.addResource(with: .video, fileURL: fileURL, options: options)
-                box.value = request.placeholderForCreatedAsset?.localIdentifier
-            } completionHandler: { success, error in
-                if success {
-                    continuation.resume()
-                } else {
-                    continuation.resume(throwing: ExportError.saveFailed(error?.localizedDescription ?? "未知错误"))
-                }
-            }
-        }
-        return box.value ?? ""
     }
 
     // MARK: 实况图
@@ -562,6 +546,26 @@ final class SLATEExporter {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         return formatter.string(from: Date())
+    }
+}
+
+
+/// 把导出进度从后台串行队列切回主线程回调。
+final class ExportProgressRelay: @unchecked Sendable {
+    private let callback: (Double) -> Void
+    private var lastValue: Double = -1
+
+    init(callback: @escaping (Double) -> Void) {
+        self.callback = callback
+    }
+
+    func report(_ value: Double) {
+        // 节流：进度变化小于 1% 不打扰主线程
+        guard value - lastValue >= 0.01 || value >= 1.0 else { return }
+        lastValue = value
+        DispatchQueue.main.async { [callback] in
+            callback(value)
+        }
     }
 }
 

@@ -18,6 +18,7 @@
 //
 
 import CoreImage
+import CoreVideo
 import CoreImage.CIFilterBuiltins
 import Foundation
 import Metal
@@ -285,7 +286,7 @@ final class SLATERenderer {
     // MARK: - 对外接口
 
     /// 渲染主入口。
-    func render(_ image: CIImage, state: EditState, lut: LUT3D?) -> CGImage? {
+    func processedImage(_ image: CIImage, state: EditState, lut: LUT3D?) -> CIImage {
         var current = image
         let a = state.adjustments
 
@@ -397,11 +398,52 @@ final class SLATERenderer {
             current = applyLUT(current, lut: lut, intensity: state.lut.intensity)
         }
 
-        // ---- 8. 出图 ----
+        return current
+    }
+
+    /// 渲染为 CGImage（预览与照片导出用）。
+    func render(_ image: CIImage, state: EditState, lut: LUT3D?) -> CGImage? {
+        let current = processedImage(image, state: state, lut: lut)
         let extent = current.extent.isInfinite ? image.extent : current.extent
         guard !extent.isEmpty, extent.width > 0, extent.height > 0 else { return nil }
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         return context.createCGImage(current, from: extent, format: .RGBA8, colorSpace: colorSpace)
+    }
+
+    /// 直接渲染进 CVPixelBuffer（视频导出用）。
+    ///
+    /// 为什么单独开这条路径：导出逐帧时若走 `createCGImage` -> `CGContext.draw`，
+    /// 每帧要多两次全画幅拷贝，4K 下极慢，长任务容易被系统打断
+    /// （表现为 H.264 报 "operation interrupted"、HEVC 卡在低进度）。
+    /// `CIContext.render(_:to:bounds:colorSpace:)` 是零拷贝的 GPU 路径。
+    @discardableResult
+    func render(_ image: CIImage,
+                state: EditState,
+                lut: LUT3D?,
+                into pixelBuffer: CVPixelBuffer,
+                size: CGSize) -> Bool {
+        var current = processedImage(image, state: state, lut: lut)
+
+        // 平移到原点
+        let origin = current.extent.origin
+        if abs(origin.x) > 0.01 || abs(origin.y) > 0.01 {
+            current = current.transformed(by: CGAffineTransform(
+                translationX: -origin.x, y: -origin.y
+            ))
+        }
+        // 尺寸对齐（正常情况下已一致；这里兜底防止 append 尺寸不匹配）
+        let extent = current.extent
+        if extent.width > 0, extent.height > 0,
+           abs(extent.width - size.width) > 1 || abs(extent.height - size.height) > 1 {
+            let sx = size.width / extent.width
+            let sy = size.height / extent.height
+            current = current.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+        }
+
+        let bounds = CGRect(origin: .zero, size: size)
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        context.render(current, to: pixelBuffer, bounds: bounds, colorSpace: colorSpace)
+        return true
     }
 
     /// 采样图像的平均 R/G/B（0...1）。
