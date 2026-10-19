@@ -204,6 +204,7 @@ struct EditorScreen: View {
     private var pillToggle: some View {
         Button {
             model.isSLog3.toggle()
+            playback.refresh()
         } label: {
             HStack(spacing: 5) {
                 Circle()
@@ -257,9 +258,21 @@ struct EditorScreen: View {
 
                 Spacer()
 
+                Button {
+                    playback.toggleMute()
+                } label: {
+                    Image(systemName: playback.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(playback.isMuted ? Theme.meta : Theme.text)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
                 Text(durationText)
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.meta)
+                    .lineLimit(1)
             }
 
             GeometryReader { geo in
@@ -377,7 +390,11 @@ struct EditorScreen: View {
 
                     Toggle("", isOn: Binding(
                         get: { model.isSLog3 },
-                        set: { model.isSLog3 = $0 }
+                        set: { newValue in
+                            model.isSLog3 = newValue
+                            // 预览显示的是播放器帧，必须让播放器重渲当前帧
+                            playback.refresh()
+                        }
                     ))
                     .labelsHidden()
                     .tint(Theme.accent)
@@ -492,7 +509,13 @@ struct EditorScreen: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.text)
                 Spacer()
-                Toggle("", isOn: Binding(get: { model.isSplitToneOn }, set: { model.isSplitToneOn = $0 }))
+                Toggle("", isOn: Binding(
+                    get: { model.isSplitToneOn },
+                    set: { newValue in
+                        model.isSplitToneOn = newValue
+                        playback.refresh()
+                    }
+                ))
                     .labelsHidden()
                     .tint(Theme.accent)
             }
@@ -519,6 +542,7 @@ struct EditorScreen: View {
                 HStack(spacing: 8) {
                     Button {
                         model.applyLUT(nil, name: nil)
+                        playback.refresh()
                     } label: {
                         Text("无")
                             .font(.system(size: 12, weight: .medium))
@@ -534,6 +558,7 @@ struct EditorScreen: View {
                         Button {
                             if let lut = try? lutStore.resolved(item) {
                                 model.applyLUT(lut, name: item.name)
+                                playback.refresh()
                             }
                         } label: {
                             Text(item.name)
@@ -559,7 +584,10 @@ struct EditorScreen: View {
 
     private var bottomBar: some View {
         HStack(spacing: 12) {
-            SLTextButton(title: "重置") { model.reset() }
+            SLTextButton(title: "重置") {
+                model.reset()
+                playback.refresh()
+            }
             SLPrimaryButton(title: videoURL != nil ? "导出" : "导出 JPG") {
                 showExport = true
             }

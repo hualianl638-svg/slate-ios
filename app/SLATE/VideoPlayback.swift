@@ -23,6 +23,7 @@ final class VideoPlayback: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var currentTime: Double = 0
     @Published private(set) var duration: Double = 0
+    @Published private(set) var isMuted = false
 
     private var player: AVPlayer?
     private var item: AVPlayerItem?
@@ -96,6 +97,12 @@ final class VideoPlayback: ObservableObject {
 
     func togglePlay() {
         isPlaying ? pause() : play()
+    }
+
+    /// 静音开关（只影响播放声音，不影响导出）。
+    func toggleMute() {
+        isMuted.toggle()
+        player?.isMuted = isMuted
     }
 
     func play() {
