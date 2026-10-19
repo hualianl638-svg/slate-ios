@@ -93,23 +93,50 @@ final class SLATERenderer {
 
     /// 阴影 / 高光 / 黑场 / 白场。
     ///
-    /// 用**亮度蒙版**驱动统一偏移，而不是逐通道算掩版：
-    /// 逐通道做会让某个通道先饱和、产生色偏；用亮度做掩版能保持色相。
-    /// 掩版形状与 Engine 的 `toneAdjustChannel` 一致。
+    /// **两个曾经出错的地方，都已修正**：
+    /// 1. 早期用"统一加偏移"：亮部像素被推过 1.0 后 clamp，表现为"拉滑杆没变化"。
+    ///    改为乘性增益（暗部乘 >1 提亮、亮部乘 <1 压暗），暗部/亮部都确实会动。
+    /// 2. 早期掩版只在 l>0.5（高光）与 l>0.667（白色）才非零，
+    ///    而 S-Log3 正确解码后中灰约 0.46，**整幅图落在掩版为零的区间**，
+    ///    于是高光/白色色阶数学上恒等于零、完全没有反应。
+    ///    现在用 smoothstep 把作用区间放宽容：
+    ///      阴影 1→0 覆盖 0…0.75 ／ 高光 0→1 覆盖 0.25…1.0
+    ///      黑场 1→0 覆盖 0…0.35 ／ 白场 0→1 覆盖 0.65…1.0
+    ///    （Core Image 内核语言不支持自定义函数，smoothstep 只能内联展开。）
     private static let toneSource = """
     kernel vec4 slateTone(__sample s, float shadows, float highlights, float blacks, float whites) {
         vec3 c = s.rgb;
         float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
         float l = clamp(luma, 0.0, 1.0);
-        float shadowMask = pow(clamp(1.0 - l * 2.0, 0.0, 1.0), 2.0) * (0.30 + 0.70 * clamp(l * 2.0, 0.0, 1.0));
-        float highMask   = pow(clamp(l * 2.0 - 1.0, 0.0, 1.0), 2.0) * (0.30 + 0.70 * clamp((1.0 - l) * 2.0, 0.0, 1.0));
-        float blackMask  = pow(clamp(1.0 - l * 3.0, 0.0, 1.0), 2.0);
-        float whiteMask  = pow(clamp(l * 3.0 - 2.0, 0.0, 1.0), 2.0);
-        float delta = shadows * 0.35 * shadowMask
-                    + highlights * 0.35 * highMask
-                    + blacks * 0.18 * blackMask
-                    + whites * 0.18 * whiteMask;
-        return vec4(clamp(c + vec3(delta), 0.0, 1.0), s.a);
+
+        // shadowMask = 1 - smoothstep(0.0, 0.75, l)
+        float st = clamp(l / 0.75, 0.0, 1.0);
+        float shadowMask = 1.0 - (st * st * (3.0 - 2.0 * st));
+
+        // highMask = smoothstep(0.25, 1.0, l)
+        float ht = clamp((l - 0.25) / 0.75, 0.0, 1.0);
+        float highMask = ht * ht * (3.0 - 2.0 * ht);
+
+        // blackMask = 1 - smoothstep(0.0, 0.35, l)
+        float bt = clamp(l / 0.35, 0.0, 1.0);
+        float blackMask = 1.0 - (bt * bt * (3.0 - 2.0 * bt));
+
+        // whiteMask = smoothstep(0.65, 1.0, l)
+        float wt = clamp((l - 0.65) / 0.35, 0.0, 1.0);
+        float whiteMask = wt * wt * (3.0 - 2.0 * wt);
+
+        vec3 outC = c;
+
+        // 暗部提亮 / 压暗（乘性）
+        float darkGain = shadows * 0.60 * shadowMask + blacks * 0.75 * blackMask;
+        outC *= (1.0 + darkGain);
+
+        // 亮部提亮 / 压暗（乘性）
+        float lightGain = highlights * 0.55 + whites * 0.70;
+        float lightWeight = highMask * 0.55 + whiteMask * 0.45;
+        outC *= (1.0 + lightGain * lightWeight);
+
+        return vec4(clamp(outC, 0.0, 1.0), s.a);
     }
     """
 
@@ -164,7 +191,16 @@ final class SLATERenderer {
         }
 
         // ---- 2. 白平衡 + 曝光（线性域，合并成一次矩阵乘法）----
-        let gain = a.whiteBalance.rgbGain
+        //
+        // 白平衡增益**先按 Rec.709 亮度权重归一化**：原始 rgbGain 会同时改变整体亮度
+        // （暖调整体变亮、冷调整体变暗），那会掩盖"只是偏色"的观感，也让用户觉得
+        // "拉色温画面没变"。归一化后 luma 保持不变，只剩色彩偏移，更容易看出来。
+        let rawGain = a.whiteBalance.rgbGain
+        let lumaGain = 0.2126 * rawGain.red + 0.7152 * rawGain.green + 0.0722 * rawGain.blue
+        var gain = rawGain
+        if lumaGain > 0.001 {
+            gain = (rawGain.red / lumaGain, rawGain.green / lumaGain, rawGain.blue / lumaGain)
+        }
         let exposureScale = pow(2.0, a.exposure)
         if gain.red != 1 || gain.green != 1 || gain.blue != 1 || exposureScale != 1 {
             current = current.applyingFilter("CIColorMatrix", parameters: [
@@ -238,6 +274,38 @@ final class SLATERenderer {
         guard !extent.isEmpty, extent.width > 0, extent.height > 0 else { return nil }
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         return context.createCGImage(current, from: extent, format: .RGBA8, colorSpace: colorSpace)
+    }
+
+    /// 采样图像的平均 R/G/B（0...1）。
+    ///
+    /// 用于诊断"某个滑杆是否真的生效"：如果拖动后平均通道值不变，
+    /// 说明参数没进渲染管线；如果有变化但肉眼看不出，说明是显示/幅度问题。
+    /// 这比让用户猜"感觉没变"要靠得住。
+    func meanRGB(of image: CIImage) -> (r: Double, g: Double, b: Double) {
+        let target = 96
+        let extent = image.extent
+        guard extent.width > 0, extent.height > 0 else { return (0, 0, 0) }
+        let scale = min(1.0, CGFloat(target) / max(extent.width, extent.height))
+        let small = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+
+        guard let cg = context.createCGImage(small, from: small.extent, format: .RGBA8,
+                                             colorSpace: CGColorSpaceCreateDeviceRGB()),
+              let data = cg.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data) else {
+            return (0, 0, 0)
+        }
+        let count = CFDataGetLength(data)
+        guard count > 4 else { return (0, 0, 0) }
+        var sumR = 0.0, sumG = 0.0, sumB = 0.0
+        var pixels = 0
+        for i in stride(from: 0, to: count - 3, by: 4) {
+            sumR += Double(bytes[i]) / 255.0
+            sumG += Double(bytes[i + 1]) / 255.0
+            sumB += Double(bytes[i + 2]) / 255.0
+            pixels += 1
+        }
+        guard pixels > 0 else { return (0, 0, 0) }
+        return (sumR / Double(pixels), sumG / Double(pixels), sumB / Double(pixels))
     }
 
     /// 亮度直方图（256 桶，归一化）。
