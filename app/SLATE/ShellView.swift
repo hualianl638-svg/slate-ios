@@ -58,9 +58,23 @@ private struct EditorHost: View {
     let payload: LibraryPayload
     var onClose: () -> Void
 
-    @StateObject private var model = EditorModel(kind: .video)
+    @StateObject private var model: EditorModel
     @StateObject private var lutStore = LUTStore()
-    @State private var didLoad = false
+
+    init(payload: LibraryPayload, onClose: @escaping () -> Void) {
+        self.payload = payload
+        self.onClose = onClose
+        // 必须在 init 里装载：子视图的 onAppear 会早于父视图的 onAppear，
+        // 若等到 onAppear 再设置 sourceVideoURL，编辑器的播放器就永远拿不到地址。
+        let model = EditorModel(kind: .video)
+        model.sourceVideoURL = payload.videoURL
+        model.load(image: payload.image, isVideo: payload.isVideo, colorInfo: nil)
+        if payload.isVideo {
+            // 图库导入未做色彩探测，默认按 S-Log3 还原；编辑器里有开关可关。
+            model.isSLog3 = true
+        }
+        _model = StateObject(wrappedValue: model)
+    }
 
     var body: some View {
         EditorScreen(
@@ -68,18 +82,8 @@ private struct EditorHost: View {
             lutStore: lutStore,
             title: payload.title,
             subtitle: payload.subtitle,
+            videoURL: payload.videoURL,
             onClose: onClose
         )
-        .onAppear {
-            guard !didLoad else { return }
-            didLoad = true
-            model.sourceVideoURL = payload.videoURL
-            model.load(image: payload.image, isVideo: payload.isVideo, colorInfo: nil)
-            // 图库导入路径没有做色彩探测，默认按 S-Log3 还原；
-            // 用户可在预览区点「709 预览」胶囊切回不做还原。
-            if payload.isVideo {
-                model.isSLog3 = true
-            }
-        }
     }
 }

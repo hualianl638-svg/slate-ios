@@ -22,11 +22,15 @@ struct EditorScreen: View {
     @ObservedObject var lutStore: LUTStore
     var title: String
     var subtitle: String
+    /// 视频文件地址（照片素材为 nil）。显式传入而不是从模型里读，
+    /// 因为子视图 onAppear 早于父视图 onAppear，那时模型还没装载。
+    var videoURL: URL?
     var onClose: () -> Void
 
     @State private var tool: Tool = .basic
     @State private var showExport = false
     @StateObject private var playback = VideoPlayback()
+    @State private var didConfigurePlayback = false
     @State private var comparing = false
 
     enum Tool: String, CaseIterable, Identifiable {
@@ -53,7 +57,7 @@ struct EditorScreen: View {
         VStack(spacing: 0) {
             nav
             preview
-            if model.sourceVideoURL != nil {
+            if videoURL != nil {
                 timeline
             }
             toolstrip
@@ -65,14 +69,20 @@ struct EditorScreen: View {
         .sheet(isPresented: $showExport) {
             SLExportSheet(model: model, lutStore: lutStore)
         }
-        .onAppear {
-            guard let url = model.sourceVideoURL else { return }
-            playback.configure(url: url) {
-                (model.state, model.currentLUT)
-            }
-        }
+        .onAppear { configurePlaybackIfNeeded() }
+        .onChange(of: videoURL) { _, _ in configurePlaybackIfNeeded() }
         .onDisappear {
             playback.teardown()
+            didConfigurePlayback = false
+        }
+    }
+
+    /// 只配置一次；配置后播放器自行维护播放状态。
+    private func configurePlaybackIfNeeded() {
+        guard !didConfigurePlayback, let videoURL else { return }
+        didConfigurePlayback = true
+        playback.configure(url: videoURL) {
+            (model.state, model.currentLUT)
         }
     }
 
@@ -135,7 +145,7 @@ struct EditorScreen: View {
                 Spacer()
                 HStack(alignment: .bottom) {
                     badge
-                    if model.sourceVideoURL != nil {
+                    if videoURL != nil {
                         pillToggle
                     }
                     Spacer()
@@ -168,7 +178,7 @@ struct EditorScreen: View {
 
     /// 预览要显示的图：视频用播放器当前帧，照片用模型渲染结果。
     private var previewImage: UIImage? {
-        if model.sourceVideoURL != nil, let videoFrame = playback.frame {
+        if videoURL != nil, let videoFrame = playback.frame {
             return videoFrame
         }
         return comparing ? model.originalUIImage : model.displayImage
@@ -180,7 +190,7 @@ struct EditorScreen: View {
     }
 
     private var badge: some View {
-        Text(model.sourceVideoURL != nil ? "S-LOG3" : "RAW")
+        Text(videoURL != nil ? "S-LOG3" : "RAW")
             .font(.system(size: 9, weight: .bold))
             .tracking(0.4)
             .foregroundStyle(Theme.text)
@@ -307,7 +317,7 @@ struct EditorScreen: View {
     private var durationText: String {
         let total = max(0, Int(playback.duration.rounded()))
         return String(format: "%02d:%02d · %@", total / 60, total % 60,
-                      model.sourceVideoURL?.lastPathComponent ?? "")
+                      videoURL?.lastPathComponent ?? "")
     }
 
     // MARK: 工具条
@@ -348,7 +358,7 @@ struct EditorScreen: View {
     /// 灰片还原 LUT 的总开关（仅视频素材显示）。
     private var restoreBar: some View {
         Group {
-            if model.sourceVideoURL != nil {
+            if videoURL != nil {
                 HStack(spacing: 8) {
                     Image(systemName: "cube.transparent")
                         .font(.system(size: 12, weight: .medium))
@@ -550,7 +560,7 @@ struct EditorScreen: View {
     private var bottomBar: some View {
         HStack(spacing: 12) {
             SLTextButton(title: "重置") { model.reset() }
-            SLPrimaryButton(title: model.sourceVideoURL != nil ? "导出" : "导出 JPG") {
+            SLPrimaryButton(title: videoURL != nil ? "导出" : "导出 JPG") {
                 showExport = true
             }
         }
