@@ -204,6 +204,7 @@ final class SLATEExporter {
         // PHAssetCreationRequest.addResource(.pairedVideo) 会以
         // PHPhotosErrorDomain 3302（资源无效）拒收——即使 MOV 本身完全可播。
         var metadataInput: AVAssetWriterInput?
+        var metadataAdaptor: AVAssetWriterInputMetadataAdaptor?
         var metadataFormat: CMMetadataFormatDescription?
         if let stillImageTime {
             if let format = Self.makeStillImageTimeFormatDescription() {
@@ -217,6 +218,7 @@ final class SLATEExporter {
                 if writer.canAdd(input) {
                     writer.add(input)
                     metadataInput = input
+                    metadataAdaptor = AVAssetWriterInputMetadataAdaptor(assetWriterInput: input)
                 }
             }
         }
@@ -248,17 +250,27 @@ final class SLATEExporter {
         let ptsOrigin = timeRange?.start ?? .zero
         writer.startSession(atSourceTime: .zero)
 
-        // 静帧时间点写入元数据（重定基后的时间轴）
-        if let stillImageTime, let metadataInput, let metadataFormat {
+        // 静帧时间点写入 still-image-time 元数据。
+        //
+        // 关键：必须用 `AVAssetWriterInputMetadataAdaptor` + `AVTimedMetadataGroup`，
+        // 之前手工拼 CMSampleBuffer 的做法生成的轨不被 Photos 认，实况图仍报 3302。
+        if let stillImageTime, let metadataInput, let metadataAdaptor, metadataFormat != nil {
             let stillPTS = CMTime(seconds: max(stillImageTime, 0), preferredTimescale: 600)
-            if let sample = Self.makeStillImageTimeSampleBuffer(
-                formatDescription: metadataFormat, time: stillPTS
-            ) {
-                while !metadataInput.isReadyForMoreMediaData {
-                    Thread.sleep(forTimeInterval: 0.002)
-                }
-                metadataInput.append(sample)
+            let item = AVMutableMetadataItem()
+            item.identifier = AVMetadataIdentifier(rawValue: "com.apple.quicktime.still-image-time")
+            item.dataType = kCMMetadataBaseDataType_SInt8 as String
+            item.value = 0 as NSNumber
+
+            let group = AVTimedMetadataGroup(
+                items: [item],
+                timeRange: CMTimeRange(start: stillPTS, duration: CMTime(value: 1, timescale: 600))
+            )
+            var waited = 0
+            while !metadataInput.isReadyForMoreMediaData && waited < 500 {
+                Thread.sleep(forTimeInterval: 0.002)
+                waited += 1
             }
+            metadataAdaptor.append(group)
             metadataInput.markAsFinished()
         }
 
@@ -480,13 +492,16 @@ final class SLATEExporter {
         // 这两项是实况图路径相对普通视频导出的差异项，也是最可能触发
         // Photos 3302（资源无效）的地方——普通视频导出已实测完全正常，
         // 所以先把变量减到最少：只做一个「从 0 开始的 3 秒无声 H.264 片段」。
+        // 静帧在片段内的相对时间（重定基后从 0 起算），必须与写入的
+        // still-image-time 元数据一致，否则系统找不到静帧对应位置。
+        let stillTimeInClip = CMTimeGetSeconds(window.duration) * clampedPosition
         let videoURL = try await exportVideo(
             sourceURL: sourceURL,
             state: state,
             lut: lut,
             settings: liveSettings,
             timeRange: window,
-            stillImageTime: nil,
+            stillImageTime: stillTimeInClip,
             includeAudio: false,
             progress: progress
         )
@@ -523,7 +538,7 @@ final class SLATEExporter {
     private static func makeStillImageTimeFormatDescription() -> CMMetadataFormatDescription? {
         let spec: [String: Any] = [
             kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as String:
-                "com.apple.quicktime.still-image-time",
+                AVMetadataIdentifier(rawValue: "com.apple.quicktime.still-image-time").rawValue,
             kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType as String:
                 kCMMetadataBaseDataType_SInt8 as String,
         ]
@@ -657,7 +672,7 @@ final class SLATEExporter {
 
         // 静帧写成临时文件，用 fileURL 添加（比 data: 更贴近系统示例的用法）
         let stillURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(baseName).JPG")
+            .appendingPathComponent("\(baseName).jpg")
         try stillData.write(to: stillURL, options: .atomic)
         defer { try? FileManager.default.removeItem(at: stillURL) }
 
@@ -684,11 +699,11 @@ final class SLATEExporter {
                         let request = PHAssetCreationRequest.forAsset()
 
                         let photoOptions = PHAssetResourceCreationOptions()
-                        photoOptions.originalFilename = "\(baseName).JPG"
+                        photoOptions.originalFilename = "\(baseName).jpg"
                         photoOptions.shouldMoveFile = false
 
                         let videoOptions = PHAssetResourceCreationOptions()
-                        videoOptions.originalFilename = "\(baseName).MOV"
+                        videoOptions.originalFilename = "\(baseName).mov"
                         videoOptions.shouldMoveFile = false
 
                         let addPhoto = {
