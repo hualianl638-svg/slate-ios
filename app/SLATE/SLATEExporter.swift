@@ -15,6 +15,7 @@
 
 import AVFoundation
 import CoreImage
+import CoreMedia
 import Foundation
 import Photos
 import UIKit
@@ -106,6 +107,7 @@ final class SLATEExporter {
                      lut: LUT3D?,
                      settings: ExportSettings,
                      timeRange: CMTimeRange? = nil,
+                     stillImageTime: Double? = nil,
                      progress: @escaping (Double) -> Void) async throws -> URL {
 
         let asset = AVURLAsset(url: sourceURL, options: [
@@ -191,6 +193,29 @@ final class SLATEExporter {
         }
         writer.add(writerInput)
 
+        // 实况图必需：still-image-time 元数据轨
+        //
+        // 系统靠这条 timed metadata 判断"哪一帧是静帧"。缺失时
+        // PHAssetCreationRequest.addResource(.pairedVideo) 会以
+        // PHPhotosErrorDomain 3302（资源无效）拒收——即使 MOV 本身完全可播。
+        var metadataInput: AVAssetWriterInput?
+        var metadataFormat: CMMetadataFormatDescription?
+        if let stillImageTime {
+            if let format = Self.makeStillImageTimeFormatDescription() {
+                metadataFormat = format
+                let input = AVAssetWriterInput(
+                    mediaType: .metadata,
+                    outputSettings: nil,
+                    sourceFormatHint: format
+                )
+                input.expectsMediaDataInRealTime = false
+                if writer.canAdd(input) {
+                    writer.add(input)
+                    metadataInput = input
+                }
+            }
+        }
+
         var audioWriterInput: AVAssetWriterInput?
         if audioReaderOutput != nil {
             let input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
@@ -217,6 +242,20 @@ final class SLATEExporter {
         // 正确做法：会话从 0 开始，每帧 PTS 减去源片段起点。
         let ptsOrigin = timeRange?.start ?? .zero
         writer.startSession(atSourceTime: .zero)
+
+        // 静帧时间点写入元数据（重定基后的时间轴）
+        if let stillImageTime, let metadataInput, let metadataFormat {
+            let stillPTS = CMTime(seconds: max(stillImageTime, 0), preferredTimescale: 600)
+            if let sample = Self.makeStillImageTimeSampleBuffer(
+                formatDescription: metadataFormat, time: stillPTS
+            ) {
+                while !metadataInput.isReadyForMoreMediaData {
+                    Thread.sleep(forTimeInterval: 0.002)
+                }
+                metadataInput.append(sample)
+            }
+            metadataInput.markAsFinished()
+        }
 
         let effectiveDuration = timeRange.map { CMTimeGetSeconds($0.duration) }
             ?? CMTimeGetSeconds(duration)
@@ -426,12 +465,15 @@ final class SLATEExporter {
         // 实况图的视频部分要小一些：3 秒 4K 用 20Mbps 会偏大，这里按 12Mbps。
         var liveSettings = settings
         liveSettings.bitrate = min(settings.bitrate, 12_000_000)
+        // 静帧在窗口内的相对位置（重定基后从 0 起算）
+        let stillTimeInClip = CMTimeGetSeconds(window.duration) * 0.5
         let videoURL = try await exportVideo(
             sourceURL: sourceURL,
             state: state,
             lut: lut,
             settings: liveSettings,
             timeRange: window,
+            stillImageTime: stillTimeInClip,
             progress: progress
         )
 
@@ -458,6 +500,82 @@ final class SLATEExporter {
             start: CMTime(seconds: start, preferredTimescale: 600),
             duration: CMTime(seconds: windowDuration, preferredTimescale: 600)
         )
+    }
+
+    /// 构造 still-image-time 的元数据格式描述。
+    ///
+    /// 对应 QuickTime 的 `com.apple.quicktime.still-image-time`，
+    /// 数据类型是 8 位有符号整数（Apple 的实况图示例即此约定）。
+    private static func makeStillImageTimeFormatDescription() -> CMMetadataFormatDescription? {
+        let spec: [String: Any] = [
+            kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as String:
+                AVMetadataIdentifier.quickTimeMetadataStillImageTime.rawValue,
+            kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType as String:
+                kCMMetadataBaseDataType_SInt8 as String,
+        ]
+        var format: CMMetadataFormatDescription?
+        let status = CMMetadataFormatDescriptionCreateWithMetadataSpecifications(
+            allocator: kCFAllocatorDefault,
+            metadataType: kCMMetadataFormatType_Boxed,
+            metadataSpecifications: [spec] as CFArray,
+            formatDescriptionOut: &format
+        )
+        return status == noErr ? format : nil
+    }
+
+    /// 构造一条 still-image-time 元数据样本（1 字节，值为 0）。
+    private static func makeStillImageTimeSampleBuffer(
+        formatDescription: CMMetadataFormatDescription,
+        time: CMTime
+    ) -> CMSampleBuffer? {
+        var blockBuffer: CMBlockBuffer?
+        let blockStatus = CMBlockBufferCreateWithMemoryBlock(
+            allocator: kCFAllocatorDefault,
+            memoryBlock: nil,
+            blockLength: 1,
+            blockAllocator: kCFAllocatorDefault,
+            customBlockSource: nil,
+            offsetToData: 0,
+            dataLength: 1,
+            flags: 0,
+            blockBufferOut: &blockBuffer
+        )
+        guard blockStatus == kCMBlockBufferNoErr, let block = blockBuffer else { return nil }
+
+        var value: Int8 = 0
+        let copyStatus = withUnsafeBytes(of: &value) { raw -> OSStatus in
+            guard let base = raw.baseAddress else { return -1 }
+            return CMBlockBufferReplaceDataBytes(
+                with: base,
+                blockBuffer: block,
+                offsetIntoDestination: 0,
+                dataLength: 1
+            )
+        }
+        guard copyStatus == kCMBlockBufferNoErr else { return nil }
+
+        var sampleBuffer: CMSampleBuffer?
+        var timing = CMSampleTimingInfo(
+            duration: .invalid,
+            presentationTimeStamp: time,
+            decodeTimeStamp: .invalid
+        )
+        var sampleSize = 1
+        let createStatus = CMSampleBufferCreate(
+            allocator: kCFAllocatorDefault,
+            dataBuffer: block,
+            dataReady: true,
+            makeDataReadyCallback: nil,
+            refcon: nil,
+            formatDescription: formatDescription,
+            sampleCount: 1,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleSizeEntryCount: 1,
+            sampleSizeArray: &sampleSize,
+            sampleBufferOut: &sampleBuffer
+        )
+        return createStatus == noErr ? sampleBuffer : nil
     }
 
     /// 把时间戳整体平移，使输出片段从 0 开始。
