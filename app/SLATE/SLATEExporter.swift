@@ -15,6 +15,7 @@
 
 import AVFoundation
 import CoreImage
+import ImageIO
 import CoreMedia
 import Foundation
 import Photos
@@ -108,6 +109,7 @@ final class SLATEExporter {
                      settings: ExportSettings,
                      timeRange: CMTimeRange? = nil,
                      stillImageTime: Double? = nil,
+                     assetIdentifier: String? = nil,
                      includeAudio: Bool = true,
                      progress: @escaping (Double) -> Void) async throws -> URL {
 
@@ -198,6 +200,13 @@ final class SLATEExporter {
         }
         writer.add(writerInput)
 
+        // 实况图必需之一：**内容标识符**。
+        // Photos 靠 `com.apple.quicktime.content.identifier` 与静帧 JPEG 的
+        // MakerApple[17] 是否一致来判定配对；缺失或不一致即 3302（资源无效）。
+        if let assetIdentifier {
+            writer.metadata = [Self.contentIdentifierMetadata(assetIdentifier)]
+        }
+
         // 实况图必需：still-image-time 元数据轨
         //
         // 系统靠这条 timed metadata 判断"哪一帧是静帧"。缺失时
@@ -257,8 +266,9 @@ final class SLATEExporter {
         if let stillImageTime, let metadataInput, let metadataAdaptor, metadataFormat != nil {
             let stillPTS = CMTime(seconds: max(stillImageTime, 0), preferredTimescale: 600)
             let item = AVMutableMetadataItem()
-            item.identifier = AVMetadataIdentifier(rawValue: "com.apple.quicktime.still-image-time")
-            item.dataType = kCMMetadataBaseDataType_SInt8 as String
+            item.key = "com.apple.quicktime.still-image-time" as NSString
+            item.keySpace = AVMetadataKeySpace(rawValue: "mdta")
+            item.dataType = "com.apple.metadata.datatype.int8"
             item.value = 0 as NSNumber
 
             let group = AVTimedMetadataGroup(
@@ -466,6 +476,9 @@ final class SLATEExporter {
         generator.requestedTimeToleranceAfter = .zero
         generator.maximumSize = CGSize(width: 4096, height: 4096)
 
+        // 配对标识符：视频与静帧都要带上同一个值
+        let assetIdentifier = UUID().uuidString
+
         let stillCGImage: CGImage
         do {
             let (image, _) = try await generator.image(at: midpoint)
@@ -474,8 +487,11 @@ final class SLATEExporter {
             throw ExportError.renderFailed
         }
         guard let renderedStill = renderer.render(CIImage(cgImage: stillCGImage), state: state, lut: lut),
-              let stillData = UIImage(cgImage: renderedStill)
-                .jpegData(compressionQuality: settings.jpegQuality) else {
+              let stillData = Self.jpegDataWithAssetIdentifier(
+                  UIImage(cgImage: renderedStill),
+                  identifier: assetIdentifier,
+                  quality: settings.jpegQuality
+              ) else {
             throw ExportError.renderFailed
         }
 
@@ -502,6 +518,7 @@ final class SLATEExporter {
             settings: liveSettings,
             timeRange: window,
             stillImageTime: stillTimeInClip,
+            assetIdentifier: assetIdentifier,
             includeAudio: false,
             progress: progress
         )
@@ -531,16 +548,51 @@ final class SLATEExporter {
         )
     }
 
+    /// 内容标识符元数据（`com.apple.quicktime.content.identifier`）。
+    private static func contentIdentifierMetadata(_ identifier: String) -> AVMetadataItem {
+        let item = AVMutableMetadataItem()
+        item.key = "com.apple.quicktime.content.identifier" as NSString
+        item.keySpace = AVMetadataKeySpace(rawValue: "mdta")
+        item.value = identifier as NSString
+        item.dataType = "com.apple.metadata.datatype.UTF-8"
+        return item
+    }
+
+    /// 把配对标识符写进 JPEG 的 MakerApple 字典（key "17"）。
+    ///
+    /// 这是实况图配对的另一半：Photos 会拿视频里的 content.identifier
+    /// 与静帧 MakerApple[17] 比对，一致才认成一对。用 UIImage.jpegData 做不到，
+    /// 必须走 CGImageDestination 才能写入 EXIF MakerApple 字典。
+    static func jpegDataWithAssetIdentifier(_ image: UIImage,
+                                            identifier: String,
+                                            quality: Double) -> Data? {
+        guard let cgImage = image.cgImage else { return nil }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output, "public.jpeg" as CFString, 1, nil
+        ) else { return nil }
+        let properties: [String: Any] = [
+            kCGImageDestinationLossyCompressionQuality as String: quality,
+            kCGImagePropertyMakerAppleDictionary as String: ["17": identifier],
+        ]
+        CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return output as Data
+    }
+
     /// 构造 still-image-time 的元数据格式描述。
     ///
     /// 对应 QuickTime 的 `com.apple.quicktime.still-image-time`，
     /// 数据类型是 8 位有符号整数（Apple 的实况图示例即此约定）。
     private static func makeStillImageTimeFormatDescription() -> CMMetadataFormatDescription? {
+        // 注意两个格式细节（照 Apple 实况图示例）：
+        //  · 标识符必须写成 "mdta/com.apple.quicktime.still-image-time"
+        //  · 数据类型是 "com.apple.metadata.datatype.int8"，不是 kCMMetadataBaseDataType_SInt8 的原值
         let spec: [String: Any] = [
             kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as String:
-                AVMetadataIdentifier(rawValue: "com.apple.quicktime.still-image-time").rawValue,
+                "mdta/com.apple.quicktime.still-image-time",
             kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType as String:
-                kCMMetadataBaseDataType_SInt8 as String,
+                "com.apple.metadata.datatype.int8",
         ]
         var format: CMMetadataFormatDescription?
         let status = CMMetadataFormatDescriptionCreateWithMetadataSpecifications(
@@ -684,9 +736,9 @@ final class SLATEExporter {
             let photoFirst: Bool
         }
         let variants = [
-            PairVariant(useFileURL: true, photoFirst: true),
-            PairVariant(useFileURL: false, photoFirst: true),
+            PairVariant(useFileURL: true, photoFirst: false),
             PairVariant(useFileURL: false, photoFirst: false),
+            PairVariant(useFileURL: true, photoFirst: true),
         ]
 
         var lastError: Error?
