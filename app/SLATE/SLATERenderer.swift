@@ -283,6 +283,9 @@ final class SLATERenderer {
     }
     """
 
+    /// Sony 官方 S-Log3 → LC-709 的 LUT（随 app bundle 打包，只解析一次）。
+    private static let sLog3LookLUT: LUT3D? = SLog3LookLUT.load()
+
     // MARK: - 对外接口
 
     /// 渲染主入口。
@@ -291,10 +294,19 @@ final class SLATERenderer {
         let a = state.adjustments
 
         // ---- 1. 归一化到线性工作域 ----
-        if state.mediaKind.isMotion,
-           let colorInfo = state.videoColorInfo,
-           colorInfo.curve == .sLog3,
-           let kernel = slog3Decode {
+        //
+        // 灰片还原**优先走 Sony 官方 LookProfile LUT**：
+        // 输入是 log 编码的 R'G'B'（正是视频帧的原始值），
+        // 输出即显示参考的 LC-709。之后再把 709 编码转回线性，
+        // 让白平衡/曝光仍在线性域计算，与普通照片走同一条链路。
+        let isSLog3Source = state.mediaKind.isMotion
+            && (state.videoColorInfo?.curve == .sLog3)
+
+        if isSLog3Source, let look = Self.sLog3LookLUT {
+            current = applyLUT(current, lut: look, intensity: 1.0)
+            current = current.applyingFilter("CISRGBToneCurveToLinear")
+        } else if isSLog3Source, let colorInfo = state.videoColorInfo, let kernel = slog3Decode {
+            // 兜底：bundle 里没有官方 LUT 时，退回 ACES IDT 反推链路
             current = kernel.apply(extent: current.extent, arguments: [current]) ?? current
             if colorInfo.colorSpace.requiresGamutConversion {
                 current = applyGamutMatrix(current, colorSpace: colorInfo.colorSpace)
