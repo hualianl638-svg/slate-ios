@@ -37,6 +37,12 @@ final class EditorModel: ObservableObject {
     private(set) var sourceImage: CIImage?
     /// 原图缩略（用于"对比"时直接显示，避免重渲）。
     private(set) var originalUIImage: UIImage?
+
+    /// 源视频文件 URL（导出视频用；照片素材为 nil）。
+    var sourceVideoURL: URL?
+
+    /// 当前已解析的 LUT（导出时复用同一份）。
+    var currentLUT: LUT3D? { resolvedLUT }
     /// 已解析的 LUT（M2 暂未接入 LUT 导入，占位）。
     private var resolvedLUT: LUT3D?
     /// 渲染序号：用于丢弃过期渲染结果。
@@ -262,6 +268,7 @@ struct ContentView: View {
     @State private var videoInfo: VideoInfo?
     @State private var busy = false
     @State private var pickerFilter: PickerFilter = .videos
+    @State private var showExport = false
 
     enum PickerFilter: String, CaseIterable {
         case videos = "视频"
@@ -305,6 +312,7 @@ struct ContentView: View {
 
                     Spacer(minLength: 20)
                     importButton
+                    exportButton
                     footnote
                 }
                 .padding(.horizontal, 20)
@@ -315,6 +323,9 @@ struct ContentView: View {
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }
             Task { await load(item) }
+        }
+        .sheet(isPresented: $showExport) {
+            ExportSheet(model: model)
         }
     }
 
@@ -638,6 +649,31 @@ struct ContentView: View {
         }
     }
 
+    /// 导出入口。没有素材时置灰。
+    private var exportButton: some View {
+        Button {
+            showExport = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("导出")
+                    .font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(model.sourceImage == nil ? Theme.meta : Theme.text)
+            .frame(maxWidth: .infinity)
+            .frame(height: 46)
+            .background(Theme.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Theme.line, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(model.sourceImage == nil)
+        .padding(.top, 8)
+    }
+
     private var footnote: some View {
         Text("M4：影调四段 + 色调分离 + LUT 已全部接通。视频与实况图导出为下一里程碑。")
             .font(.system(size: 11))
@@ -664,6 +700,7 @@ struct ContentView: View {
                 let info = try await probe
                 let thumb = try await shot
                 self.videoInfo = info
+                model.sourceVideoURL = movie.url
                 // 传输函数里若标注了 HLG/PQ，本里程碑不支持，提示但不阻塞
                 model.load(image: thumb, isVideo: true, colorInfo: .sonySLog3Cine)
             } else {
@@ -672,6 +709,7 @@ struct ContentView: View {
                     throw ProbeError.noVideoTrack
                 }
                 self.videoInfo = nil
+                model.sourceVideoURL = nil
                 model.load(image: image, isVideo: false, colorInfo: nil)
             }
         } catch {
