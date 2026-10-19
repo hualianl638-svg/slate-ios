@@ -110,40 +110,161 @@ enum VideoProbe {
 
     /// 识别一段视频是"对数灰片"还是"标准 709"。
     ///
-    /// 判据（都是 S-Log3 的典型特征）：
-    ///  1. 黑场被抬高：S-Log3 把线性 0 编码到约 0.09，709 接近 0；
-    ///  2. 彩度偏低：对数编码压平了色差信号；
-    ///  3. 高光压缩：99 分位通常到不了 1.0；
-    ///  4. 元数据加权：10bit 更常见于灰片，HDR(HLG/PQ) 则直接排除。
+    /// 上一版只看单帧的黑场抬升，室外 709 素材（天空/强光把 5% 分位抬高）
+    /// 会被误判成灰片。现在改成：
+    ///
+    /// **正向证据**（灰片特征）
+    ///  · 黑场落在对数特征窗口 0.05~0.14（S-Log3 把线性 0 编到 ≈0.09）；
+    ///  · 平均彩度低（对数编码压平色差）；
+    ///  · 极暗像素占比高（对数信号抬底后几乎没有纯黑）；
+    ///  · 10bit 加权。
+    ///
+    /// **反向证据**（正常 709 特征）
+    ///  · 高光裁切：709 室外常有超过 2% 的像素贴到 1.0，对数信号很少裁切；
+    ///  · 对比跨度大：709 的 p95-p05 常 > 0.85，对数编码压缩后更小；
+    ///  · HDR HLG/PQ 直接排除。
+    ///
+    /// 多帧取中位数，避免单帧（对着天空/黑场）造成误判。
     static func detectLogProfile(url: URL) async -> LogProfileDetection? {
-        // 取一帧缩略图做统计
-        guard let image = try? await thumbnail(url: url, maxPixel: 192),
-              let cgImage = image.cgImage else { return nil }
+        let asset = AVURLAsset(url: url)
+        guard let duration = try? await asset.load(.duration) else { return nil }
+        let total = CMTimeGetSeconds(duration)
+        guard total.isFinite, total > 0 else { return nil }
 
-        let width = 128
-        let height = 128
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 192, height: 192)
+        generator.requestedTimeToleranceBefore = CMTime(seconds: 0.3, preferredTimescale: 600)
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 0.3, preferredTimescale: 600)
+
+        // 取 5 个时间点（短素材自动减少）
+        var fractions: [Double] = [0.15, 0.3, 0.5, 0.7, 0.85]
+        if total < 1.0 { fractions = [0.5] }
+        else if total < 3.0 { fractions = [0.3, 0.7] }
+
+        var samples: [ImageStats] = []
+        for fraction in fractions {
+            let time = CMTime(seconds: total * fraction, preferredTimescale: 600)
+            guard let (cgImage, _) = try? await generator.image(at: time),
+                  let stats = Self.analyze(cgImage) else { continue }
+            samples.append(stats)
+        }
+        guard !samples.isEmpty else { return nil }
+
+        func median(_ values: [Double]) -> Double {
+            let sorted = values.sorted()
+            return sorted[sorted.count / 2]
+        }
+
+        let blackFloor = median(samples.map(\.p05))
+        let meanChroma = median(samples.map(\.meanChroma))
+        let highlightCeiling = median(samples.map(\.p99))
+        let contrastSpan = median(samples.map { $0.p95 - $0.p05 })
+        let deepShadowRatio = median(samples.map(\.deepShadowRatio))
+        let clippedRatio = median(samples.map(\.clippedRatio))
+
+        let info = try? await inspect(url: url)
+        let isHDR = info?.isHDR ?? false
+        let depth = info?.bitDepth ?? 8
+        let hint = "\(depth)bit \(isHDR ? "HDR" : (info?.transfer ?? "—"))"
+
+        var score = 0.0
+
+        // 正向：黑场在对数窗口内
+        if blackFloor >= 0.05 && blackFloor <= 0.14 {
+            score += 0.38
+        } else if blackFloor > 0.14 {
+            // 抬得过高更像是低对比 709 / 雾天，而非对数信号
+            score += 0.06
+        }
+
+        // 正向：低彩度
+        if meanChroma < 0.16 {
+            score += 0.22
+        } else if meanChroma < 0.22 {
+            score += 0.10
+        }
+
+        // 正向：几乎没有纯黑像素（对数抬高黑位）
+        if deepShadowRatio < 0.02 {
+            score += 0.12
+        }
+
+        // 正向：10bit
+        if depth >= 10 { score += 0.08 }
+
+        // 反向：高光裁切多 → 正常 709
+        if clippedRatio > 0.06 {
+            score -= 0.45
+        } else if clippedRatio > 0.02 {
+            score -= 0.30
+        }
+
+        // 反向：对比跨度大 → 正常 709
+        if contrastSpan > 0.92 {
+            score -= 0.25
+        } else if contrastSpan > 0.80 {
+            score -= 0.12
+        }
+
+        // 反向：HDR 直接排除
+        if isHDR { score -= 0.60 }
+
+        let confidence = min(max(score, 0), 1)
+        return LogProfileDetection(
+            isLikelyLog: confidence >= 0.62,
+            confidence: confidence,
+            blackFloor: blackFloor,
+            meanChroma: meanChroma,
+            highlightCeiling: highlightCeiling,
+            hint: hint + String(format: " · 黑场%.2f 彩度%.2f 裁切%.0f%%",
+                                blackFloor, meanChroma, clippedRatio * 100)
+        )
+    }
+
+    /// 单帧统计量。
+    struct ImageStats {
+        var p05: Double
+        var p95: Double
+        var p99: Double
+        var meanChroma: Double
+        /// 亮度 < 0.02 的像素占比。
+        var deepShadowRatio: Double
+        /// 亮度 > 0.98 的像素占比。
+        var clippedRatio: Double
+    }
+
+    /// 把一帧缩到 128×128 统计亮度分布与彩度。
+    static func analyze(_ cgImage: CGImage) -> ImageStats? {
+        let side = 128
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
         guard let context = CGContext(
             data: &pixels,
-            width: width,
-            height: height,
+            width: side,
+            height: side,
             bitsPerComponent: 8,
-            bytesPerRow: width * 4,
+            bytesPerRow: side * 4,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: side, height: side))
 
         var lumas = [Double]()
-        lumas.reserveCapacity(width * height)
+        lumas.reserveCapacity(side * side)
         var chromaSum = 0.0
+        var deepShadow = 0
+        var clipped = 0
+
         var index = 0
         while index < pixels.count {
             let r = Double(pixels[index]) / 255.0
             let g = Double(pixels[index + 1]) / 255.0
             let b = Double(pixels[index + 2]) / 255.0
-            lumas.append(0.2126 * r + 0.7152 * g + 0.0722 * b)
+            let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
+            lumas.append(luma)
             chromaSum += (max(r, max(g, b)) - min(r, min(g, b)))
+            if luma < 0.02 { deepShadow += 1 }
+            if luma > 0.98 { clipped += 1 }
             index += 4
         }
         guard !lumas.isEmpty else { return nil }
@@ -154,32 +275,14 @@ enum VideoProbe {
             return lumas[min(lumas.count - 1, Int(Double(lumas.count - 1) * clamped))]
         }
 
-        let blackFloor = percentile(0.05)
-        let highlightCeiling = percentile(0.99)
-        let meanChroma = chromaSum / Double(lumas.count)
-
-        // 元数据提示
-        let info = try? await inspect(url: url)
-        let isHDR = info?.isHDR ?? false
-        let depth = info?.bitDepth ?? 8
-        let hint = "\(depth)bit \(isHDR ? "HDR" : (info?.transfer ?? "—"))"
-
-        var score = 0.0
-        if blackFloor > 0.055 { score += 0.45 }
-        if blackFloor > 0.080 { score += 0.15 }
-        if meanChroma < 0.22 { score += 0.20 }
-        if highlightCeiling < 0.94 { score += 0.10 }
-        if depth >= 10 { score += 0.10 }
-        if isHDR { score -= 0.50 }
-
-        let confidence = min(max(score, 0), 1)
-        return LogProfileDetection(
-            isLikelyLog: confidence >= 0.55,
-            confidence: confidence,
-            blackFloor: blackFloor,
-            meanChroma: meanChroma,
-            highlightCeiling: highlightCeiling,
-            hint: hint
+        let count = Double(lumas.count)
+        return ImageStats(
+            p05: percentile(0.05),
+            p95: percentile(0.95),
+            p99: percentile(0.99),
+            meanChroma: chromaSum / count,
+            deepShadowRatio: Double(deepShadow) / count,
+            clippedRatio: Double(clipped) / count
         )
     }
 

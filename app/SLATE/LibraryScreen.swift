@@ -69,7 +69,8 @@ final class LibraryStore: ObservableObject {
 
                 var note: String?
                 if let detection {
-                    note = "\(detection.hint) · \(detection.isLikelyLog ? "灰片" : "709")"
+                    let percent = Int((detection.confidence * 100).rounded())
+                    note = "\(detection.hint) · \(detection.isLikelyLog ? "灰片" : "709")（置信 \(percent)%）"
                 }
 
                 let payload = LibraryPayload(
