@@ -96,6 +96,42 @@ final class EditorModel: ObservableObject {
         set { state.adjustments.whiteBalance.relativeTintOffset = newValue; requestRender() }
     }
 
+    // MARK: LUT
+
+    /// 当前生效的 LUT 展示名（nil 表示未套用）。
+    @Published private(set) var activeLUTName: String?
+
+    /// LUT 强度 0...1。
+    var lutIntensity: Double {
+        get { state.lut.intensity }
+        set {
+            state.lut.intensity = min(max(newValue, 0), 1)
+            // 强度归零仍保留引用，便于再次拉回（EditState.clamp 只在持久化时清理）
+            requestRender()
+        }
+    }
+
+    /// 套用 / 取消 LUT。
+    ///
+    /// - Parameters:
+    ///   - lut: 已解析的 LUT；nil 表示取消。
+    ///   - name: 展示名（用于 UI 显示当前选中项）。
+    func applyLUT(_ lut: LUT3D?, name: String?) {
+        resolvedLUT = lut
+        activeLUTName = lut == nil ? nil : name
+        if lut == nil {
+            state.lut = .none
+        } else {
+            state.lut.reference = LUTReference(
+                relativePath: "LUTs/\(name ?? "lut").cube",
+                displayName: name ?? "LUT",
+                dimension: lut?.dimension
+            )
+            if state.lut.intensity <= 0 { state.lut.intensity = 1.0 }
+        }
+        requestRender()
+    }
+
     /// 是否按 S-Log3 处理（原型里的「709 预览」开关的反面）。
     var isSLog3: Bool {
         get { state.videoColorInfo?.curve == .sLog3 }
@@ -112,6 +148,8 @@ final class EditorModel: ObservableObject {
         let info = state.videoColorInfo
         state = EditState(mediaKind: kind)
         state.videoColorInfo = info
+        resolvedLUT = nil
+        activeLUTName = nil
         requestRender()
     }
 
@@ -150,6 +188,7 @@ final class EditorModel: ObservableObject {
 struct ContentView: View {
 
     @StateObject private var model = EditorModel(kind: .video)
+    @StateObject private var lutStore = LUTStore()
     @State private var pickerItem: PhotosPickerItem?
     @State private var videoInfo: VideoInfo?
     @State private var busy = false
@@ -181,6 +220,13 @@ struct ContentView: View {
                     }
                     sliders
                         .padding(.top, 18)
+
+                    Divider()
+                        .overlay(Theme.line)
+                        .padding(.vertical, 16)
+
+                    LUTPanel(store: lutStore, model: model)
+
                     Spacer(minLength: 20)
                     importButton
                     footnote
@@ -430,7 +476,7 @@ struct ContentView: View {
     }
 
     private var footnote: some View {
-        Text("M2：S-Log3 解码 + 基础调节已在 GPU 上实时生效。LUT 导入与视频/实况图导出在 M3。")
+        Text("M3：已支持 LUT 导入（.cube）与套用强度。视频导出与实况图在 M4。")
             .font(.system(size: 11))
             .foregroundStyle(Theme.meta)
             .padding(.top, 10)
