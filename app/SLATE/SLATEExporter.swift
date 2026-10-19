@@ -332,6 +332,29 @@ final class SLATEExporter {
         return outURL
     }
 
+    /// 把导出的视频写入相册。
+    @discardableResult
+    func saveVideoToLibrary(fileURL: URL) async throws -> String {
+        try await ensureAddOnlyAccess()
+        let box = Box<String?>(nil)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            PHPhotoLibrary.shared().performChanges {
+                let request = PHAssetCreationRequest.forAsset()
+                let options = PHAssetResourceCreationOptions()
+                options.shouldMoveFile = false
+                request.addResource(with: .video, fileURL: fileURL, options: options)
+                box.value = request.placeholderForCreatedAsset?.localIdentifier
+            } completionHandler: { success, error in
+                if success {
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: ExportError.saveFailed(error?.localizedDescription ?? "未知错误"))
+                }
+            }
+        }
+        return box.value ?? ""
+    }
+
     // MARK: 实况图
 
     /// 导出 Apple 实况照片（Live Photo）。
