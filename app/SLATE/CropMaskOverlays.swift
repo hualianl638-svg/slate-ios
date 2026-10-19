@@ -12,6 +12,8 @@ import SwiftUI
 struct CropOverlay: View {
 
     @Binding var settings: CropMaskSettings
+    /// 源图宽高比（像素），比例锁定时必须用它把归一化尺寸换算成真实比例。
+    var sourceAspect: CGFloat
     var onChange: () -> Void
 
     @State private var startRect: CGRect?
@@ -144,8 +146,9 @@ struct CropOverlay: View {
 
                 var rect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
                 if let ratio = settings.aspectRatio {
-                    // 比例锁定：以宽为准回算高
-                    let targetHeight = rect.width / ratio
+                    // 比例锁定：归一化高 = 归一化宽 × 源图宽高比 / 目标比例
+                    // （像素比例 A = w·W / (h·H)  =>  h = w · (W/H) / A）
+                    let targetHeight = rect.width * sourceAspect / max(ratio, 0.0001)
                     if corner == .topLeft || corner == .topRight {
                         rect.origin.y = max(0, rect.maxY - targetHeight)
                         rect.size.height = min(targetHeight, rect.maxY)

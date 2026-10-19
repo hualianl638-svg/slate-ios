@@ -40,6 +40,7 @@ struct EditorScreen: View {
         case hsl = "HSL"
         case split = "色调分离"
         case lut = "LUT"
+        case crop = "裁剪"
 
         var id: String { rawValue }
 
@@ -50,6 +51,7 @@ struct EditorScreen: View {
             case .hsl: return "eyedropper.halffull"
             case .split: return "circle.hexagongrid.fill"
             case .lut: return "cube.transparent"
+            case .crop: return "crop"
             }
         }
     }
@@ -77,11 +79,12 @@ struct EditorScreen: View {
         }
         .onAppear { configurePlaybackIfNeeded() }
         .onChange(of: videoURL) { _, _ in configurePlaybackIfNeeded() }
-        .onChange(of: tool) { _, _ in
-            // 裁剪/蒙版已下线，确保不残留编辑旁路
+        .onChange(of: tool) { _, newValue in
+            // 编辑裁剪时绕过裁剪，画面完整显示，手柄坐标才能正确映射
             var settings = model.cropMask
-            if settings.bypassCrop {
-                settings.bypassCrop = false
+            let shouldBypass = (newValue == .crop)
+            if settings.bypassCrop != shouldBypass {
+                settings.bypassCrop = shouldBypass
                 model.cropMask = settings
                 playback.refresh()
             }
@@ -170,6 +173,18 @@ struct EditorScreen: View {
                 }
             }
             .padding(10)
+
+            // 裁剪：画面内拖手柄
+            if tool == .crop {
+                GeometryReader { _ in
+                    CropOverlay(
+                        settings: cropMaskBinding,
+                        sourceAspect: effectiveSourceAspect
+                    ) {
+                        playback.refresh()
+                    }
+                }
+            }
 
             if model.isRendering {
                 ProgressView()
@@ -455,6 +470,7 @@ struct EditorScreen: View {
         case .hsl: hslPanel
         case .split: splitPanel
         case .lut: lutPanel
+        case .crop: cropPanel
         }
     }
 
@@ -605,6 +621,15 @@ struct EditorScreen: View {
 
     // MARK: 裁剪 / 蒙版面板
 
+    /// 源图的有效宽高比（旋转 90°/270° 时取倒数）。
+    ///
+    /// 裁剪框是归一化坐标，换算成像素宽高比必须乘上源图宽高比，
+    /// 否则 1:1 在 16:9 素材上会变成 16:9 —— 上一版比例对不上就是这个原因。
+    private var effectiveSourceAspect: CGFloat {
+        let base = previewAspect
+        return model.cropMask.turns % 2 == 0 ? base : 1 / max(base, 0.0001)
+    }
+
     private var cropMaskBinding: Binding<CropMaskSettings> {
         Binding(
             get: { model.cropMask },
@@ -632,24 +657,7 @@ struct EditorScreen: View {
             HStack(spacing: 6) {
                 ForEach(Array(["自由", "1:1", "4:3", "16:9", "9:16"].enumerated()), id: \.offset) { index, title in
                     SLChip(title: title, isOn: model.cropMask.aspectLock == index, compact: true) {
-                        var settings = model.cropMask
-                        settings.aspectLock = index
-                        if let ratio = settings.aspectRatio {
-                            // 比例锁定后，按当前框中心重新拟合
-                            let centerX = settings.cropX + settings.cropWidth / 2
-                            let centerY = settings.cropY + settings.cropHeight / 2
-                            var width = 1.0
-                            var height = 1.0 / Double(ratio)
-                            if height > 1 { height = 1; width = Double(ratio) }
-                            width = min(0.9, width)
-                            height = min(0.9, height)
-                            settings.cropX = min(max(centerX - width / 2, 0), 1 - width)
-                            settings.cropY = min(max(centerY - height / 2, 0), 1 - height)
-                            settings.cropWidth = width
-                            settings.cropHeight = height
-                        }
-                        model.cropMask = settings
-                        playback.refresh()
+                        applyAspectLock(index)
                     }
                 }
                 Spacer(minLength: 0)
@@ -658,6 +666,8 @@ struct EditorScreen: View {
             HStack(spacing: 10) {
                 SLTextButton(title: "旋转 90°") {
                     setCrop(\.turns, (model.cropMask.turns + 1) % 4)
+                    // 旋转后源图宽高比变倒数，按当前锁定比例重新拟合
+                    applyAspectLock(model.cropMask.aspectLock)
                 }
                 SLTextButton(title: "复位") {
                     var settings = model.cropMask
@@ -673,11 +683,52 @@ struct EditorScreen: View {
                 Spacer()
             }
 
-            Text("拖动画面内边框移动，拖四角改大小")
+            Text("拖动画面内方框移动，拖四角改大小；选比例后会锁定形状")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.meta)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// 应用比例锁定。
+    ///
+    /// 关键换算：像素宽高比 `A = (w·W) / (h·H)`，其中 w/h 是归一化宽高。
+    /// 因此归一化关系是 `w / h = A / S`（S = W/H 源图宽高比）。
+    /// 上一版直接令 w = h，在非方形源图上必然不等于目标比例。
+    private func applyAspectLock(_ lockIndex: Int) {
+        var settings = model.cropMask
+        settings.aspectLock = lockIndex
+
+        guard let ratio = settings.aspectRatio else {
+            model.cropMask = settings
+            playback.refresh()
+            return
+        }
+
+        let sourceAspect = effectiveSourceAspect
+        var width = 1.0
+        var height = 1.0
+        if ratio >= sourceAspect {
+            // 目标更宽：宽度占满，高度按比例缩
+            width = 1.0
+            height = Double(sourceAspect / ratio)
+        } else {
+            // 目标更高：高度占满，宽度按比例缩
+            height = 1.0
+            width = Double(ratio / sourceAspect)
+        }
+
+        // 留一点边距（90%），围绕画面中心
+        width *= 0.9
+        height *= 0.9
+
+        settings.cropWidth = width
+        settings.cropHeight = height
+        settings.cropX = (1 - width) / 2
+        settings.cropY = (1 - height) / 2
+
+        model.cropMask = settings
+        playback.refresh()
     }
 
     private var maskPanel: some View {
