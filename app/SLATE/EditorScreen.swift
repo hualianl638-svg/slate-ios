@@ -26,6 +26,7 @@ struct EditorScreen: View {
 
     @State private var tool: Tool = .basic
     @State private var showExport = false
+    @StateObject private var playback = VideoPlayback()
     @State private var comparing = false
 
     enum Tool: String, CaseIterable, Identifiable {
@@ -56,12 +57,22 @@ struct EditorScreen: View {
                 timeline
             }
             toolstrip
+            restoreBar
             panelWrap
             bottomBar
         }
         .background(Theme.bg.ignoresSafeArea())
         .sheet(isPresented: $showExport) {
             SLExportSheet(model: model, lutStore: lutStore)
+        }
+        .onAppear {
+            guard let url = model.sourceVideoURL else { return }
+            playback.configure(url: url) {
+                (model.state, model.currentLUT)
+            }
+        }
+        .onDisappear {
+            playback.teardown()
         }
     }
 
@@ -102,7 +113,7 @@ struct EditorScreen: View {
         ZStack {
             Color.black
 
-            if let image = comparing ? model.originalUIImage : model.displayImage {
+            if let image = previewImage {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -153,6 +164,14 @@ struct EditorScreen: View {
         .aspectRatio(previewAspect, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipped()
+    }
+
+    /// 预览要显示的图：视频用播放器当前帧，照片用模型渲染结果。
+    private var previewImage: UIImage? {
+        if model.sourceVideoURL != nil, let videoFrame = playback.frame {
+            return videoFrame
+        }
+        return comparing ? model.originalUIImage : model.displayImage
     }
 
     private var previewAspect: CGFloat {
@@ -210,37 +229,49 @@ struct EditorScreen: View {
     private var timeline: some View {
         VStack(spacing: 8) {
             HStack(spacing: 10) {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Theme.onAccent)
-                    .frame(width: 28, height: 28)
-                    .background(Theme.accent, in: Circle())
+                Button {
+                    playback.togglePlay()
+                } label: {
+                    Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.onAccent)
+                        .frame(width: 28, height: 28)
+                        .background(Theme.accent, in: Circle())
+                }
+                .buttonStyle(.plain)
 
-                Text("00:00:00")
+                Text(playback.timeText)
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .monoDigits()
                     .foregroundStyle(Theme.text)
 
                 Spacer()
 
-                Text(model.sourceVideoURL?.lastPathComponent ?? "")
+                Text(durationText)
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.meta)
-                    .lineLimit(1)
             }
 
             GeometryReader { geo in
+                let width = geo.size.width
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(Theme.surface2)
+
+                    // 胶片条示意
                     HStack(spacing: 2) {
-                        ForEach(0..<8, id: \.self) { _ in
-                            Rectangle()
-                                .fill(Theme.line.opacity(0.55))
+                        ForEach(0..<10, id: \.self) { _ in
+                            Rectangle().fill(Theme.line.opacity(0.5))
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
+                    // 已播放进度
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Theme.accent.opacity(0.28))
+                        .frame(width: max(0, width * playback.progress))
+
+                    // 播放头
                     Rectangle()
                         .fill(Theme.accent)
                         .frame(width: 2)
@@ -250,8 +281,18 @@ struct EditorScreen: View {
                                 .frame(width: 7, height: 7)
                                 .offset(y: -3)
                         }
+                        .offset(x: max(0, min(width - 2, width * playback.progress)))
                 }
                 .frame(height: geo.size.height)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { drag in
+                            guard playback.duration > 0 else { return }
+                            let ratio = min(1, max(0, drag.location.x / max(width, 1)))
+                            playback.seek(to: ratio * playback.duration)
+                        }
+                )
             }
             .frame(height: 34)
         }
@@ -261,6 +302,12 @@ struct EditorScreen: View {
         .overlay(alignment: .top) {
             Rectangle().fill(Theme.line).frame(height: 0.5)
         }
+    }
+
+    private var durationText: String {
+        let total = max(0, Int(playback.duration.rounded()))
+        return String(format: "%02d:%02d · %@", total / 60, total % 60,
+                      model.sourceVideoURL?.lastPathComponent ?? "")
     }
 
     // MARK: 工具条
@@ -293,6 +340,45 @@ struct EditorScreen: View {
         .frame(height: 46)
         .overlay(alignment: .top) {
             Rectangle().fill(Theme.line).frame(height: 0.5)
+        }
+    }
+
+    // MARK: 还原 LUT 开关
+
+    /// 灰片还原 LUT 的总开关（仅视频素材显示）。
+    private var restoreBar: some View {
+        Group {
+            if model.sourceVideoURL != nil {
+                HStack(spacing: 8) {
+                    Image(systemName: "cube.transparent")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(model.isSLog3 ? Theme.accent : Theme.meta)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("还原 LUT")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Theme.text)
+                        Text("SLog3SGamut3.CineToLC-709")
+                            .font(.system(size: 9))
+                            .foregroundStyle(Theme.meta)
+                    }
+
+                    Spacer()
+
+                    Toggle("", isOn: Binding(
+                        get: { model.isSLog3 },
+                        set: { model.isSLog3 = $0 }
+                    ))
+                    .labelsHidden()
+                    .tint(Theme.accent)
+                }
+                .padding(.horizontal, SL.pad)
+                .padding(.vertical, 6)
+                .background(Theme.surface.opacity(0.6))
+                .overlay(alignment: .top) {
+                    Rectangle().fill(Theme.line).frame(height: 0.5)
+                }
+            }
         }
     }
 
@@ -494,9 +580,19 @@ struct EditorScreen: View {
                     .monoDigits()
                     .foregroundStyle(abs(value.wrappedValue) < 0.001 ? Theme.meta : Theme.accent)
             }
-            Slider(value: value, in: range)
-                .tint(Theme.accent)
-                .frame(height: 26)
+            Slider(
+                value: Binding(
+                    get: { value.wrappedValue },
+                    set: { newValue in
+                        value.wrappedValue = newValue
+                        // 视频暂停时，改动参数要立刻重渲当前帧
+                        playback.refresh()
+                    }
+                ),
+                in: range
+            )
+            .tint(Theme.accent)
+            .frame(height: 26)
         }
     }
 
