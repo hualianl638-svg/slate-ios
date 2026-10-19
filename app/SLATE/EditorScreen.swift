@@ -29,6 +29,7 @@ struct EditorScreen: View {
 
     @State private var tool: Tool = .basic
     @State private var showExport = false
+    @State private var showFullPreview = false
     @StateObject private var playback = VideoPlayback()
     @State private var didConfigurePlayback = false
     @State private var comparing = false
@@ -68,6 +69,11 @@ struct EditorScreen: View {
         .background(Theme.bg.ignoresSafeArea())
         .sheet(isPresented: $showExport) {
             SLExportSheet(model: model, lutStore: lutStore)
+        }
+        .fullScreenCover(isPresented: $showFullPreview) {
+            FullPreviewView(image: previewImage) {
+                showFullPreview = false
+            }
         }
         .onAppear { configurePlaybackIfNeeded() }
         .onChange(of: videoURL) { _, _ in configurePlaybackIfNeeded() }
@@ -131,37 +137,30 @@ struct EditorScreen: View {
                 ProgressView().tint(Theme.muted)
             }
 
-            // 直方图叠加（右上）
-            if !model.histogram.isEmpty {
-                HistogramOverlay(buckets: model.histogram)
-                    .frame(width: 84, height: 48)
-                    .padding(.top, 8)
-                    .padding(.trailing, 10)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            }
-
-            // 角标 + 709 预览开关（左下）
-            VStack {
-                Spacer()
-                HStack(alignment: .bottom) {
-                    badge
-                    if videoURL != nil {
-                        pillToggle
+            // 叠加控件分两排：上排左角标/胶囊、右直方图；下排右放大/对比。
+            // 之前三件都堆在底部同一行，竖屏（画面窄）时会互相压住。
+            VStack(spacing: 0) {
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        badge
+                        if videoURL != nil {
+                            pillToggle
+                        }
                     }
-                    Spacer()
+                    Spacer(minLength: 4)
+                    if !model.histogram.isEmpty {
+                        HistogramOverlay(buckets: model.histogram)
+                            .frame(width: 84, height: 48)
+                    }
                 }
-                .padding(10)
-            }
-
-            // 对比按钮（右下）
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
+                Spacer(minLength: 8)
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    zoomButton
                     compareButton
                 }
-                .padding(10)
             }
+            .padding(10)
 
             if model.isRendering {
                 ProgressView()
@@ -218,6 +217,21 @@ struct EditorScreen: View {
             .padding(.vertical, 4)
             .background(.black.opacity(0.5), in: Capsule())
             .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var zoomButton: some View {
+        Button {
+            showFullPreview = true
+        } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Theme.text)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(.black.opacity(0.55), in: Capsule())
+                .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 0.5))
         }
         .buttonStyle(.plain)
     }
