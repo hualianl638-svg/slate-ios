@@ -474,7 +474,7 @@ struct EditorScreen: View {
     // MARK: 组件
 
     private func sliderRow(_ title: String,
-                           value: Binding<Double>,
+                           _ value: Binding<Double>,
                            _ range: ClosedRange<Double>,
                            _ format: @escaping (Double) -> String) -> some View {
         VStack(spacing: 4) {
