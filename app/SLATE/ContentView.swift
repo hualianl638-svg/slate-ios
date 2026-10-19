@@ -295,6 +295,10 @@ struct ContentView: View {
     @StateObject private var model = EditorModel(kind: .video)
     @StateObject private var lutStore = LUTStore()
     @State private var pickerItem: PhotosPickerItem?
+
+    /// 从图库带入的素材（为 nil 时与原来行为一致，走应用内导入）。
+    var prefill: LibraryPayload?
+    @State private var didApplyPrefill = false
     @State private var videoInfo: VideoInfo?
     @State private var busy = false
     @State private var pickerFilter: PickerFilter = .videos
@@ -355,6 +359,12 @@ struct ContentView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 28)
             }
+        }
+        .onAppear {
+            guard !didApplyPrefill, let prefill else { return }
+            didApplyPrefill = true
+            model.sourceVideoURL = prefill.videoURL
+            model.load(image: prefill.image, isVideo: prefill.isVideo, colorInfo: nil)
         }
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }

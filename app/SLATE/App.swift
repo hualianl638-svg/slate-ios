@@ -4,7 +4,7 @@ import SwiftUI
 struct SLATEApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ShellView()
                 .preferredColorScheme(.dark)
         }
     }
