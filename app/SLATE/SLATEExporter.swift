@@ -509,9 +509,7 @@ final class SLATEExporter {
     private static func makeStillImageTimeFormatDescription() -> CMMetadataFormatDescription? {
         let spec: [String: Any] = [
             kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as String:
-                // 直接用底层 QuickTime 元数据标识符：
-                // AVMetadataIdentifier 在本 SDK 里没有暴露对应成员
-                com.apple.quicktime.still-image-time,
+                "com.apple.quicktime.still-image-time",
             kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType as String:
                 kCMMetadataBaseDataType_SInt8 as String,
         ]
