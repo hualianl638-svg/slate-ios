@@ -20,6 +20,10 @@ struct ExportSheet: View {
     @State private var resultText: String?
     @State private var errorText: String?
     @State private var shareURL: URL?
+    /// 实况图时长（秒）。
+    @State private var liveDuration: Double = 3.0
+    /// 实况图静帧位置：0 = 窗口开头，1 = 窗口结尾。
+    @State private var liveStillPosition: Double = 0.5
 
     enum Settings: String, CaseIterable {
         case photoJPG = "照片 JPG"
@@ -54,6 +58,42 @@ struct ExportSheet: View {
                                 }
                                 .buttonStyle(.plain)
                             }
+                        }
+                    }
+
+                    // 实况图专属：时长与静帧位置
+                    if kind == .livePhoto {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("实况图设置")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Theme.muted)
+
+                            HStack {
+                                Text("时长")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(Theme.text)
+                                Spacer()
+                                Text(String(format: "%.1f 秒", liveDuration))
+                                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(Theme.accent)
+                            }
+                            Slider(value: $liveDuration, in: 1...5, step: 0.5)
+                                .tint(Theme.accent)
+
+                            HStack {
+                                Text("静帧位置")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(Theme.text)
+                                Spacer()
+                                Text(String(format: "%.0f%%", liveStillPosition * 100))
+                                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(Theme.accent)
+                            }
+                            Slider(value: $liveStillPosition, in: 0...1, step: 0.05)
+                                .tint(Theme.accent)
+                            Text("0% = 片段开头，50% = 中点，100% = 结尾")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.meta)
                         }
                     }
 
@@ -201,7 +241,9 @@ struct ExportSheet: View {
                     sourceURL: videoURL,
                     state: model.state,
                     lut: lut,
-                    settings: settings
+                    settings: settings,
+                    targetDuration: liveDuration,
+                    stillPosition: liveStillPosition
                 ) { value in
                     progress = value
                 }

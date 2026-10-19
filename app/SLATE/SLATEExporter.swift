@@ -108,6 +108,7 @@ final class SLATEExporter {
                      settings: ExportSettings,
                      timeRange: CMTimeRange? = nil,
                      stillImageTime: Double? = nil,
+                     includeAudio: Bool = true,
                      progress: @escaping (Double) -> Void) async throws -> URL {
 
         let asset = AVURLAsset(url: sourceURL, options: [
@@ -151,8 +152,12 @@ final class SLATEExporter {
         if let timeRange { reader.timeRange = timeRange }
 
         // 音频透传（outputSettings: nil 表示不重新编码）
+        //
+        // 实况图刻意**不带音轨**：截取 3 秒时音频需要重定基，
+        // 而重定基后的音频时间轴可能被 Photos 判定为非法（3302）。
+        // 普通视频导出照常带声音，已实测可用。
         var audioReaderOutput: AVAssetReaderTrackOutput?
-        if let audioTrack = audioTracks.first {
+        if includeAudio, let audioTrack = audioTracks.first {
             let out = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
             out.alwaysCopiesSampleData = false
             if reader.canAdd(out) {
@@ -429,6 +434,7 @@ final class SLATEExporter {
                          lut: LUT3D?,
                          settings: ExportSettings,
                          targetDuration: Double = 3.0,
+                         stillPosition: Double = 0.5,
                          progress: @escaping (Double) -> Void) async throws -> URL {
 
         let asset = AVURLAsset(url: sourceURL, options: [
@@ -436,10 +442,10 @@ final class SLATEExporter {
         ])
         let duration = try await asset.load(.duration)
         let window = Self.livePhotoWindow(assetDuration: duration, target: targetDuration)
-        let midpoint = CMTimeAdd(
-            window.start,
-            CMTimeMultiplyByFloat64(window.duration, multiplier: 0.5)
-        )
+        // 静帧位置：0 = 窗口开头，1 = 窗口结尾（默认 0.5 即中点）
+        let clampedPosition = min(max(stillPosition, 0), 1)
+        let stillOffset = CMTimeMultiplyByFloat64(window.duration, multiplier: clampedPosition)
+        let midpoint = CMTimeAdd(window.start, stillOffset)
 
         // ---- 1. 静帧：取窗口中点那一帧，按当前调色渲染 ----
         let generator = AVAssetImageGenerator(asset: asset)
@@ -469,15 +475,19 @@ final class SLATEExporter {
         var liveSettings = settings
         liveSettings.kind = .videoH264
         liveSettings.bitrate = min(settings.bitrate, 12_000_000)
-        // 静帧在窗口内的相对位置（重定基后从 0 起算）
-        let stillTimeInClip = CMTimeGetSeconds(window.duration) * 0.5
+        // 实况图视频：不带音轨、不带元数据轨。
+        //
+        // 这两项是实况图路径相对普通视频导出的差异项，也是最可能触发
+        // Photos 3302（资源无效）的地方——普通视频导出已实测完全正常，
+        // 所以先把变量减到最少：只做一个「从 0 开始的 3 秒无声 H.264 片段」。
         let videoURL = try await exportVideo(
             sourceURL: sourceURL,
             state: state,
             lut: lut,
             settings: liveSettings,
             timeRange: window,
-            stillImageTime: stillTimeInClip,
+            stillImageTime: nil,
+            includeAudio: false,
             progress: progress
         )
 
@@ -687,7 +697,14 @@ final class SLATEExporter {
                 }
                 return box.value ?? ""
             } catch {
-                lastError = error
+                // 把资源规格带进错误信息，便于定位（尺寸/时长是最常见的拒收原因）
+                let seconds = (try? await AVURLAsset(url: videoURL).load(.duration)).map { CMTimeGetSeconds($0) } ?? -1
+                let videoKB = videoSize / 1024
+                lastError = ExportError.saveFailed(
+                    "\(error.localizedDescription)［诊断：静帧 \(stillData.count / 1024)KB，"
+                    + "视频 \(videoKB)KB / \(String(format: "%.2f", seconds))s，"
+                    + "形式=\(useFileURL ? "fileURL" : "data")］"
+                )
                 continue
             }
         }
