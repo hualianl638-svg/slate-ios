@@ -38,8 +38,10 @@ struct ShellView: View {
             }
         }
         .fullScreenCover(item: $editing) { wrapper in
-            ContentView(prefill: wrapper.payload)
-                .preferredColorScheme(.dark)
+            EditorHost(payload: wrapper.payload) {
+                editing = nil
+            }
+            .preferredColorScheme(.dark)
         }
     }
 }
@@ -48,4 +50,31 @@ struct ShellView: View {
 private struct EditingPayload: Identifiable {
     let id = UUID()
     var payload: LibraryPayload
+}
+
+/// 一次编辑会话：为素材创建独立的 EditorModel，进入时装载。
+private struct EditorHost: View {
+
+    let payload: LibraryPayload
+    var onClose: () -> Void
+
+    @StateObject private var model = EditorModel(kind: .video)
+    @StateObject private var lutStore = LUTStore()
+    @State private var didLoad = false
+
+    var body: some View {
+        EditorScreen(
+            model: model,
+            lutStore: lutStore,
+            title: payload.title,
+            subtitle: payload.subtitle,
+            onClose: onClose
+        )
+        .onAppear {
+            guard !didLoad else { return }
+            didLoad = true
+            model.sourceVideoURL = payload.videoURL
+            model.load(image: payload.image, isVideo: payload.isVideo, colorInfo: nil)
+        }
+    }
 }

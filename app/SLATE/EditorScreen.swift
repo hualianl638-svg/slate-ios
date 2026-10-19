@@ -1,0 +1,558 @@
+//
+//  EditorScreen.swift
+//  SLATE
+//
+//  原型「照片编辑 / 视频编辑」屏的完整实现：
+//    顶部导航（返回 + 文件名 + 元信息 + 更多）
+//    预览区（画面 + 直方图叠加 + 角标 + 对比按钮 + 709 预览开关）
+//    视频时间轴（播放 / 时间码 / 胶片条 / 播放头）
+//    单行工具条（基础 / 影调 / HSL / 色调分离 / LUT）
+//    当前工具的单个面板
+//    底部（重置 + 导出）
+//
+
+import SwiftUI
+import UIKit
+
+// MARK: - 编辑器
+
+struct EditorScreen: View {
+
+    @ObservedObject var model: EditorModel
+    @ObservedObject var lutStore: LUTStore
+    var title: String
+    var subtitle: String
+    var onClose: () -> Void
+
+    @State private var tool: Tool = .basic
+    @State private var showExport = false
+    @State private var comparing = false
+
+    enum Tool: String, CaseIterable, Identifiable {
+        case basic = "基础"
+        case tone = "影调"
+        case hsl = "HSL"
+        case split = "色调分离"
+        case lut = "LUT"
+
+        var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .basic: return "slider.horizontal.3"
+            case .tone: return "circle.lefthalf.filled"
+            case .hsl: return "eyedropper.halffull"
+            case .split: return "circle.hexagongrid.fill"
+            case .lut: return "cube.transparent"
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            nav
+            preview
+            if model.sourceVideoURL != nil {
+                timeline
+            }
+            toolstrip
+            panelWrap
+            bottomBar
+        }
+        .background(Theme.bg.ignoresSafeArea())
+        .sheet(isPresented: $showExport) {
+            SLExportSheet(model: model, lutStore: lutStore)
+        }
+    }
+
+    // MARK: 顶部导航
+
+    private var nav: some View {
+        HStack(spacing: 4) {
+            Button(action: onClose) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                    .frame(width: SL.touch, height: SL.touch)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.meta)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            SLIconButton(systemName: "ellipsis", tint: Theme.muted) {}
+        }
+        .padding(.horizontal, 4)
+        .frame(height: 52)
+    }
+
+    // MARK: 预览
+
+    private var preview: some View {
+        ZStack {
+            Color.black
+
+            if let image = comparing ? model.originalUIImage : model.displayImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                ProgressView().tint(Theme.muted)
+            }
+
+            // 直方图叠加（右上）
+            if !model.histogram.isEmpty {
+                HistogramOverlay(buckets: model.histogram)
+                    .frame(width: 84, height: 48)
+                    .padding(.top, 8)
+                    .padding(.trailing, 10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
+
+            // 角标 + 709 预览开关（左下）
+            VStack {
+                Spacer()
+                HStack(alignment: .bottom) {
+                    badge
+                    if model.sourceVideoURL != nil {
+                        pillToggle
+                    }
+                    Spacer()
+                }
+                .padding(10)
+            }
+
+            // 对比按钮（右下）
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    compareButton
+                }
+                .padding(10)
+            }
+
+            if model.isRendering {
+                ProgressView()
+                    .tint(Theme.accent)
+                    .scaleEffect(0.8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(12)
+            }
+        }
+        .aspectRatio(previewAspect, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+        .clipped()
+    }
+
+    private var previewAspect: CGFloat {
+        guard let image = model.originalUIImage, image.size.height > 0 else { return 4.0 / 3.0 }
+        return image.size.width / image.size.height
+    }
+
+    private var badge: some View {
+        Text(model.sourceVideoURL != nil ? "S-LOG3" : "RAW")
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.4)
+            .foregroundStyle(Theme.text)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(.black.opacity(0.5), in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 0.5))
+    }
+
+    private var pillToggle: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(model.isSLog3 ? Theme.accent : Theme.meta)
+                .frame(width: 5, height: 5)
+            Text(model.isSLog3 ? "S-Log3" : "709 预览")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(Theme.text)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.black.opacity(0.5), in: Capsule())
+        .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 0.5))
+    }
+
+    private var compareButton: some View {
+        Text("对比")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(Theme.text)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .background(.black.opacity(0.55), in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 0.5))
+            .onLongPressGesture(minimumDuration: 0.05, pressing: { pressed in
+                comparing = pressed
+            }, perform: {})
+    }
+
+    // MARK: 时间轴
+
+    private var timeline: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Theme.onAccent)
+                    .frame(width: 28, height: 28)
+                    .background(Theme.accent, in: Circle())
+
+                Text("00:00:00")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .monoDigits()
+                    .foregroundStyle(Theme.text)
+
+                Spacer()
+
+                Text(model.sourceVideoURL?.lastPathComponent ?? "")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.meta)
+                    .lineLimit(1)
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Theme.surface2)
+                    HStack(spacing: 2) {
+                        ForEach(0..<8, id: \.self) { _ in
+                            Rectangle()
+                                .fill(Theme.line.opacity(0.55))
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                    Rectangle()
+                        .fill(Theme.accent)
+                        .frame(width: 2)
+                        .overlay(alignment: .top) {
+                            Circle()
+                                .fill(Theme.accent)
+                                .frame(width: 7, height: 7)
+                                .offset(y: -3)
+                        }
+                }
+                .frame(height: geo.size.height)
+            }
+            .frame(height: 34)
+        }
+        .padding(.horizontal, SL.pad)
+        .padding(.vertical, 8)
+        .background(Theme.bg)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Theme.line).frame(height: 0.5)
+        }
+    }
+
+    // MARK: 工具条
+
+    private var toolstrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(Tool.allCases) { item in
+                    let isOn = tool == item
+                    Button {
+                        tool = item
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: item.icon)
+                                .font(.system(size: 12, weight: .medium))
+                            Text(item.rawValue)
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(isOn ? Theme.onAccent : Theme.text)
+                        .padding(.horizontal, 12)
+                        .frame(height: 32)
+                        .background(isOn ? Theme.accent : Theme.surface2, in: Capsule())
+                        .overlay(Capsule().strokeBorder(isOn ? .clear : Theme.line, lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, SL.pad)
+        }
+        .frame(height: 46)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Theme.line).frame(height: 0.5)
+        }
+    }
+
+    // MARK: 面板
+
+    private var panelWrap: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                panel
+            }
+            .padding(.horizontal, SL.pad)
+            .padding(.top, 14)
+            .padding(.bottom, 12)
+        }
+        .frame(maxHeight: 268)
+        .background(Theme.bg)
+    }
+
+    @ViewBuilder
+    private var panel: some View {
+        switch tool {
+        case .basic: basicPanel
+        case .tone: tonePanel
+        case .hsl: hslPanel
+        case .split: splitPanel
+        case .lut: lutPanel
+        }
+    }
+
+    private var basicPanel: some View {
+        VStack(spacing: 12) {
+            sliderRow("曝光", Binding(get: { model.exposure }, set: { model.exposure = $0 }),
+                      -2...2, { String(format: "%+.2f EV", $0) })
+            sliderRow("明度", Binding(get: { model.brightness }, set: { model.brightness = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+            sliderRow("对比度", Binding(get: { model.contrast }, set: { model.contrast = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+            sliderRow("色温", Binding(get: { model.temperature }, set: { model.temperature = $0 }),
+                      -1...1, temperatureLabel)
+            sliderRow("色调", Binding(get: { model.tint }, set: { model.tint = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+            sliderRow("饱和度", Binding(get: { model.saturation }, set: { model.saturation = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+            sliderRow("自然饱和度", Binding(get: { model.vibrance }, set: { model.vibrance = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+        }
+    }
+
+    private var tonePanel: some View {
+        VStack(spacing: 12) {
+            sliderRow("阴影", Binding(get: { model.shadows }, set: { model.shadows = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+            sliderRow("高光", Binding(get: { model.highlights }, set: { model.highlights = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+            sliderRow("黑色色阶", Binding(get: { model.blacks }, set: { model.blacks = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+            sliderRow("白色色阶", Binding(get: { model.whites }, set: { model.whites = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+        }
+    }
+
+    private var hslPanel: some View {
+        VStack(spacing: 12) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    ForEach(HSLBandID.allCases, id: \.self) { band in
+                        let isOn = model.hslSelectedBand == band
+                        Button {
+                            model.hslSelectedBand = band
+                        } label: {
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(swatch(band))
+                                    .frame(width: 7, height: 7)
+                                Text(band.displayName)
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundStyle(isOn ? Theme.onAccent : Theme.text)
+                            .padding(.horizontal, 9)
+                            .frame(height: 28)
+                            .background(isOn ? Theme.accent : Theme.surface2, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            sliderRow("色相", Binding(get: { model.hslHue }, set: { model.hslHue = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+            sliderRow("饱和度", Binding(get: { model.hslSaturation }, set: { model.hslSaturation = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+            sliderRow("明度", Binding(get: { model.hslLuminance }, set: { model.hslLuminance = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+        }
+    }
+
+    private var splitPanel: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("启用色调分离")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text)
+                Spacer()
+                Toggle("", isOn: Binding(get: { model.isSplitToneOn }, set: { model.isSplitToneOn = $0 }))
+                    .labelsHidden()
+                    .tint(Theme.accent)
+            }
+            sliderRow("分离强度", Binding(get: { model.splitToneAmount }, set: { model.splitToneAmount = $0 }),
+                      0...1, { String(format: "%.2f", $0) })
+            sliderRow("阴影色相", Binding(get: { model.shadowHue }, set: { model.shadowHue = $0 }),
+                      0...1, hueLabel)
+            sliderRow("阴影饱和", Binding(get: { model.shadowSaturation }, set: { model.shadowSaturation = $0 }),
+                      0...1, { String(format: "%.2f", $0) })
+            sliderRow("高光色相", Binding(get: { model.highlightHue }, set: { model.highlightHue = $0 }),
+                      0...1, hueLabel)
+            sliderRow("高光饱和", Binding(get: { model.highlightSaturation }, set: { model.highlightSaturation = $0 }),
+                      0...1, { String(format: "%.2f", $0) })
+        }
+    }
+
+    private var lutPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(model.activeLUTName ?? "未套用 LUT")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(model.activeLUTName == nil ? Theme.meta : Theme.accent)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Button {
+                        model.applyLUT(nil, name: nil)
+                    } label: {
+                        Text("无")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(model.activeLUTName == nil ? Theme.onAccent : Theme.text)
+                            .padding(.horizontal, 12)
+                            .frame(height: 30)
+                            .background(model.activeLUTName == nil ? Theme.accent : Theme.surface2, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    ForEach(lutStore.items) { item in
+                        let isOn = model.activeLUTName == item.name
+                        Button {
+                            if let lut = try? lutStore.resolved(item) {
+                                model.applyLUT(lut, name: item.name)
+                            }
+                        } label: {
+                            Text(item.name)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(isOn ? Theme.onAccent : Theme.text)
+                                .lineLimit(1)
+                                .padding(.horizontal, 12)
+                                .frame(height: 30)
+                                .background(isOn ? Theme.accent : Theme.surface2, in: Capsule())
+                                .overlay(Capsule().strokeBorder(isOn ? .clear : Theme.line, lineWidth: 0.5))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            sliderRow("LUT 强度", Binding(get: { model.lutIntensity }, set: { model.lutIntensity = $0 }),
+                      0...1, { String(format: "%.2f", $0) })
+        }
+    }
+
+    // MARK: 底部
+
+    private var bottomBar: some View {
+        HStack(spacing: 12) {
+            SLTextButton(title: "重置") { model.reset() }
+            SLPrimaryButton(title: model.sourceVideoURL != nil ? "导出" : "导出 JPG") {
+                showExport = true
+            }
+        }
+        .padding(.horizontal, SL.pad)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
+        .background(Theme.bg)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Theme.line).frame(height: 0.5)
+        }
+    }
+
+    // MARK: 组件
+
+    private func sliderRow(_ title: String,
+                           value: Binding<Double>,
+                           _ range: ClosedRange<Double>,
+                           _ format: @escaping (Double) -> String) -> some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text)
+                Spacer()
+                Text(format(value.wrappedValue))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .monoDigits()
+                    .foregroundStyle(abs(value.wrappedValue) < 0.001 ? Theme.meta : Theme.accent)
+            }
+            Slider(value: value, in: range)
+                .tint(Theme.accent)
+                .frame(height: 26)
+        }
+    }
+
+    private func swatch(_ band: HSLBandID) -> Color {
+        let rgb = band.swatchRGB
+        return Color(red: rgb.red, green: rgb.green, blue: rgb.blue)
+    }
+
+    private func temperatureLabel(_ value: Double) -> String {
+        let kelvin = Int(5500 + value * 2500)
+        return "\(kelvin)K"
+    }
+
+    private func hueLabel(_ value: Double) -> String {
+        let names = ["红", "橙", "黄", "绿", "青", "蓝", "紫", "洋红"]
+        let index = Int((value * Double(names.count)).rounded()) % names.count
+        return names[max(0, min(names.count - 1, index))]
+    }
+}
+
+// MARK: - 直方图叠加
+
+/// 用 Path 画亮度直方图（原型里是 R/G/B/L 四条曲线，这里渲染的是亮度通道）。
+struct HistogramOverlay: View {
+    let buckets: [Float]
+
+    var body: some View {
+        GeometryReader { geo in
+            let count = max(1, buckets.count)
+            let maxValue = max(0.0001, buckets.max() ?? 1)
+
+            Path { path in
+                path.move(to: CGPoint(x: 0, y: geo.size.height))
+                for index in 0..<count {
+                    let x = geo.size.width * CGFloat(index) / CGFloat(count - 1)
+                    let normalized = CGFloat(buckets[index] / maxValue)
+                    let y = geo.size.height * (1 - min(1, normalized))
+                    path.addLine(to: CGPoint(x: x, y: y))
+                }
+                path.addLine(to: CGPoint(x: geo.size.width, y: geo.size.height))
+                path.closeSubpath()
+            }
+            .fill(
+                LinearGradient(
+                    colors: [Theme.log.opacity(0.55), Theme.log.opacity(0.08)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .overlay {
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: geo.size.height))
+                    for index in 0..<count {
+                        let x = geo.size.width * CGFloat(index) / CGFloat(count - 1)
+                        let normalized = CGFloat(buckets[index] / maxValue)
+                        let y = geo.size.height * (1 - min(1, normalized))
+                        path.addLine(to: CGPoint(x: x, y: y))
+                    }
+                }
+                .stroke(Theme.log.opacity(0.85), lineWidth: 0.7)
+            }
+        }
+        .background(.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+}
