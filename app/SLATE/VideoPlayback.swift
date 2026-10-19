@@ -12,6 +12,7 @@
 
 import AVFoundation
 import Combine
+import ImageIO
 import CoreImage
 import SwiftUI
 import UIKit
@@ -170,14 +171,12 @@ final class VideoPlayback: ObservableObject {
         let (state, lut) = stateProvider()
 
         // 朝向 + 缩放到预览尺寸
+        //
+        // 用 `CIImage.oriented(_:)` 而不是手工乘 preferredTransform：
+        // 手工矩阵在竖屏素材上容易把平移符号算错，表现为"画面转了 180°"。
+        // oriented() 的语义由 EXIF 方向定义，平移由 Core Image 负责，不会翻错。
         var image = CIImage(cvPixelBuffer: pixelBuffer)
-        if !transform.isIdentity {
-            image = image.transformed(by: transform)
-            image = image.transformed(by: CGAffineTransform(
-                translationX: -image.extent.origin.x,
-                y: -image.extent.origin.y
-            ))
-        }
+            .oriented(Self.orientation(from: transform))
         let longest = max(image.extent.width, image.extent.height)
         if longest > previewMaxEdge {
             let scale = previewMaxEdge / longest
@@ -199,6 +198,31 @@ final class VideoPlayback: ObservableObject {
         }
 
         _ = player
+    }
+
+    /// 把 video track 的 preferredTransform 映射成 EXIF 方向。
+    private static func orientation(from t: CGAffineTransform) -> CGImagePropertyOrientation {
+        let a = t.a, b = t.b, c = t.c, d = t.d
+        // 先看旋转分量（忽略平移）
+        if abs(a - 1) < 0.001, abs(b) < 0.001, abs(c) < 0.001, abs(d - 1) < 0.001 {
+            return .up
+        }
+        if abs(a) < 0.001, abs(b - 1) < 0.001, abs(c + 1) < 0.001, abs(d) < 0.001 {
+            return .right
+        }
+        if abs(a) < 0.001, abs(b + 1) < 0.001, abs(c - 1) < 0.001, abs(d) < 0.001 {
+            return .left
+        }
+        if abs(a + 1) < 0.001, abs(b) < 0.001, abs(c) < 0.001, abs(d + 1) < 0.001 {
+            return .down
+        }
+        if abs(a + 1) < 0.001, abs(b) < 0.001, abs(c) < 0.001, abs(d - 1) < 0.001 {
+            return .upMirrored
+        }
+        if abs(a - 1) < 0.001, abs(b) < 0.001, abs(c) < 0.001, abs(d + 1) < 0.001 {
+            return .downMirrored
+        }
+        return .up
     }
 
     // MARK: 时间文本
