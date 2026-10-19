@@ -456,6 +456,7 @@ final class SLATEExporter {
                          lut: LUT3D?,
                          settings: ExportSettings,
                          targetDuration: Double = 3.0,
+                         startFraction: Double = 0,
                          stillPosition: Double = 0.5,
                          progress: @escaping (Double) -> Void) async throws -> URL {
 
@@ -463,7 +464,12 @@ final class SLATEExporter {
             AVURLAssetPreferPreciseDurationAndTimingKey: true,
         ])
         let duration = try await asset.load(.duration)
-        let window = Self.livePhotoWindow(assetDuration: duration, target: targetDuration)
+        // 片段：由「起点比例 + 时长」决定（时长限制在 2~5 秒，并按素材总长夹取）
+        let window = Self.livePhotoWindow(
+            assetDuration: duration,
+            target: targetDuration,
+            startFraction: startFraction
+        )
         // 静帧位置：0 = 窗口开头，1 = 窗口结尾（默认 0.5 即中点）
         let clampedPosition = min(max(stillPosition, 0), 1)
         let stillOffset = CMTimeMultiplyByFloat64(window.duration, multiplier: clampedPosition)
@@ -534,14 +540,20 @@ final class SLATEExporter {
         return stillURL
     }
 
-    /// 计算实况图时间窗：居中截取，且不超出素材时长。
-    static func livePhotoWindow(assetDuration: CMTime, target: Double = 3.0) -> CMTimeRange {
+    /// 计算实况图时间窗：时长 2~5 秒，起点由 `startFraction` 决定。
+    static func livePhotoWindow(assetDuration: CMTime,
+                                target: Double = 3.0,
+                                startFraction: Double = 0) -> CMTimeRange {
         let total = CMTimeGetSeconds(assetDuration)
         guard total.isFinite, total > 0 else {
             return CMTimeRange(start: .zero, duration: CMTime(seconds: 1, preferredTimescale: 600))
         }
-        let windowDuration = min(target, total)
-        let start = max(0, (total - windowDuration) / 2.0)
+        let clampedTarget = min(max(target, 2.0), 5.0)
+        let windowDuration = min(clampedTarget, total)
+        let fraction = min(max(startFraction, 0), 1)
+        // 起点在「0 ～ 总长-片长」之间滑动
+        let maxStart = max(0, total - windowDuration)
+        let start = maxStart * fraction
         return CMTimeRange(
             start: CMTime(seconds: start, preferredTimescale: 600),
             duration: CMTime(seconds: windowDuration, preferredTimescale: 600)

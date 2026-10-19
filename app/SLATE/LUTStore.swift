@@ -56,7 +56,6 @@ final class LUTStore: ObservableObject {
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         self.directory = documents.appendingPathComponent("LUTs", isDirectory: true)
         createDirectoryIfNeeded()
-        makeBuiltins()
         reload()
     }
 

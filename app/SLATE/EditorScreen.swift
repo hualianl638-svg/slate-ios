@@ -40,8 +40,6 @@ struct EditorScreen: View {
         case hsl = "HSL"
         case split = "色调分离"
         case lut = "LUT"
-        case crop = "裁剪"
-        case mask = "蒙版"
 
         var id: String { rawValue }
 
@@ -52,8 +50,6 @@ struct EditorScreen: View {
             case .hsl: return "eyedropper.halffull"
             case .split: return "circle.hexagongrid.fill"
             case .lut: return "cube.transparent"
-            case .crop: return "crop"
-            case .mask: return "circle.dashed"
             }
         }
     }
@@ -81,12 +77,14 @@ struct EditorScreen: View {
         }
         .onAppear { configurePlaybackIfNeeded() }
         .onChange(of: videoURL) { _, _ in configurePlaybackIfNeeded() }
-        .onChange(of: tool) { _, newValue in
-            // 编辑裁剪/蒙版时绕过裁剪，让画面完整显示，手柄才能映射到整幅图
+        .onChange(of: tool) { _, _ in
+            // 裁剪/蒙版已下线，确保不残留编辑旁路
             var settings = model.cropMask
-            settings.bypassCrop = (newValue == .crop || newValue == .mask)
-            model.cropMask = settings
-            playback.refresh()
+            if settings.bypassCrop {
+                settings.bypassCrop = false
+                model.cropMask = settings
+                playback.refresh()
+            }
         }
         .onDisappear {
             playback.teardown()
@@ -172,21 +170,6 @@ struct EditorScreen: View {
                 }
             }
             .padding(10)
-
-            // 裁剪 / 蒙版：直接在画面上拖手柄
-            GeometryReader { _ in
-                Group {
-                    if tool == .crop {
-                        CropOverlay(settings: cropMaskBinding) {
-                            playback.refresh()
-                        }
-                    } else if tool == .mask, model.cropMask.maskKind != 0 {
-                        MaskOverlay(settings: cropMaskBinding) {
-                            playback.refresh()
-                        }
-                    }
-                }
-            }
 
             if model.isRendering {
                 ProgressView()
@@ -472,8 +455,6 @@ struct EditorScreen: View {
         case .hsl: hslPanel
         case .split: splitPanel
         case .lut: lutPanel
-        case .crop: cropPanel
-        case .mask: maskPanel
         }
     }
 
