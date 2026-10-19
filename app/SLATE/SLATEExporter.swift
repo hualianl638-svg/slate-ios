@@ -209,9 +209,14 @@ final class SLATEExporter {
         guard writer.startWriting() else {
             throw ExportError.writerFailed(writer.error?.localizedDescription ?? "startWriting 失败")
         }
-        // 会话起点取素材的真实起点：实况图只导中间 3 秒时，
-        // PTS 不是从 0 开始，直接 startSession(.zero) 会在片头留一段空白。
-        writer.startSession(atSourceTime: timeRange?.start ?? .zero)
+        // PTS 重定基：导出的文件必须从 0 开始。
+        //
+        // 之前写成 startSession(atSourceTime: timeRange.start)，结果实况图的 3 秒片段
+        // 第一帧时间戳是 1.5s，MOV 前面留了 1.5s 空白、总时长变 4.5s，
+        // Photos 校验配对视频时判定资源无效 -> PHPhotosErrorDomain 3302。
+        // 正确做法：会话从 0 开始，每帧 PTS 减去源片段起点。
+        let ptsOrigin = timeRange?.start ?? .zero
+        writer.startSession(atSourceTime: .zero)
 
         let effectiveDuration = timeRange.map { CMTimeGetSeconds($0.duration) }
             ?? CMTimeGetSeconds(duration)
@@ -250,7 +255,9 @@ final class SLATEExporter {
                             while let audioSample = pendingAudio ?? audioOut.copyNextSampleBuffer() {
                                 pendingAudio = nil
                                 guard audioIn.isReadyForMoreMediaData else { break }
-                                audioIn.append(audioSample)
+                                if let retimed = Self.retimed(audioSample, subtracting: ptsOrigin) {
+                                    audioIn.append(retimed)
+                                }
                             }
                             audioIn.markAsFinished()
                         }
@@ -281,7 +288,9 @@ final class SLATEExporter {
                             let audioPTS = CMSampleBufferGetPresentationTimeStamp(audioSample)
                             guard CMTimeCompare(audioPTS, pts) <= 0 else { break }
                             guard audioIn.isReadyForMoreMediaData else { break }
-                            audioIn.append(audioSample)
+                            if let retimed = Self.retimed(audioSample, subtracting: ptsOrigin) {
+                                audioIn.append(retimed)
+                            }
                             pendingAudio = nil
                         }
                     }
@@ -313,7 +322,11 @@ final class SLATEExporter {
                         into: outBuffer, size: outputSize
                     )
 
-                    if !adaptor.append(outBuffer, withPresentationTime: pts) {
+                    let outputPTS = CMTimeSubtract(pts, ptsOrigin)
+                    if outputPTS.isNegative {
+                        continue
+                    }
+                    if !adaptor.append(outBuffer, withPresentationTime: outputPTS) {
                         finishWithError(ExportError.writerFailed(
                             writer.error?.localizedDescription ?? "写入帧失败"
                         ))
@@ -447,6 +460,43 @@ final class SLATEExporter {
         )
     }
 
+    /// 把时间戳整体平移，使输出片段从 0 开始。
+    ///
+    /// 音频样本用 `CMSampleBufferCreateCopyWithNewTiming` 改时间轴；
+    /// 失败就返回 nil（丢掉该样本），不让整段导出失败。
+    private static func retimed(_ sample: CMSampleBuffer, subtracting offset: CMTime) -> CMSampleBuffer? {
+        if offset == .zero { return sample }
+        var timing = CMSampleTimingInfo()
+        let status = CMSampleBufferGetSampleTimingInfo(sample, at: 0, timingInfoOut: &timing)
+        guard status == noErr else { return nil }
+        timing.presentationTimeStamp = CMTimeSubtract(timing.presentationTimeStamp, offset)
+        if timing.presentationTimeStamp.isNegative { return nil }
+        timing.decodeTimeStamp = .invalid
+        var newBuffer: CMSampleBuffer?
+        let created = CMSampleBufferCreateCopyWithNewTiming(
+            allocator: kCFAllocatorDefault,
+            sampleBuffer: sample,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleBufferOut: &newBuffer
+        )
+        guard created == noErr else { return nil }
+        return newBuffer
+    }
+
+    /// 校验一个视频文件能被当作实况图的配对视频：可播放、有视频轨、时长合理。
+    private static func validateVideo(url: URL) async throws -> Bool {
+        let asset = AVURLAsset(url: url)
+        guard let tracks = try? await asset.loadTracks(withMediaType: .video), !tracks.isEmpty else {
+            return false
+        }
+        guard let duration = try? await asset.load(.duration) else { return false }
+        let seconds = CMTimeGetSeconds(duration)
+        guard seconds.isFinite, seconds > 0.3, seconds < 30 else { return false }
+        let playable = (try? await asset.load(.isPlayable)) ?? false
+        return playable
+    }
+
     /// 把「静帧 + 视频」作为一对实况照片写入相册。
     ///
     /// - Returns: 新建资源的 localIdentifier。
@@ -456,9 +506,28 @@ final class SLATEExporter {
                            baseName: String) async throws -> String {
         try await ensureAddOnlyAccess()
 
+        // 保存前先校验：宁可给出精确原因，也不要把不合格的资源丢给 Photos
+        // （Photos 只会回一个笼统的 PHPhotosErrorDomain 3302）。
         guard FileManager.default.fileExists(atPath: videoURL.path) else {
             throw ExportError.saveFailed("配对的视频文件不存在：\(videoURL.lastPathComponent)")
         }
+        let videoSize = (try? FileManager.default.attributesOfItem(atPath: videoURL.path)[.size] as? Int) ?? 0
+        guard (videoSize ?? 0) > 1024 else {
+            throw ExportError.saveFailed("配对视频过小（\(videoSize ?? 0) 字节），可能导出中断")
+        }
+        guard let videoTrackOK = try? await Self.validateVideo(url: videoURL), videoTrackOK else {
+            throw ExportError.saveFailed("配对视频不可播放或没有视频轨道，无法作为实况图视频")
+        }
+        // 静帧必须是 JPEG（FF D8 开头）
+        guard stillData.count > 1024, stillData.first == 0xFF, stillData.dropFirst().first == 0xD8 else {
+            throw ExportError.saveFailed("静帧不是有效的 JPEG 数据")
+        }
+
+        // 静帧写成临时文件，用 fileURL 添加（比 data: 更贴近系统示例的用法）
+        let stillURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(baseName).JPG")
+        try stillData.write(to: stillURL, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: stillURL) }
 
         let box = Box<String?>(nil)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -468,7 +537,8 @@ final class SLATEExporter {
                 // 静帧：.photo 资源，必须是 JPEG 或 HEIC
                 let photoOptions = PHAssetResourceCreationOptions()
                 photoOptions.originalFilename = "\(baseName).JPG"
-                request.addResource(with: .photo, data: stillData, options: photoOptions)
+                photoOptions.shouldMoveFile = false
+                request.addResource(with: .photo, fileURL: stillURL, options: photoOptions)
 
                 // 视频：.pairedVideo 资源，文件名主干必须与静帧一致
                 let videoOptions = PHAssetResourceCreationOptions()
