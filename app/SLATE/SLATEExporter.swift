@@ -323,7 +323,7 @@ final class SLATEExporter {
                     )
 
                     let outputPTS = CMTimeSubtract(pts, ptsOrigin)
-                    if outputPTS.isNegative {
+                    if CMTimeCompare(outputPTS, .zero) < 0 {
                         continue
                     }
                     if !adaptor.append(outBuffer, withPresentationTime: outputPTS) {
@@ -470,7 +470,7 @@ final class SLATEExporter {
         let status = CMSampleBufferGetSampleTimingInfo(sample, at: 0, timingInfoOut: &timing)
         guard status == noErr else { return nil }
         timing.presentationTimeStamp = CMTimeSubtract(timing.presentationTimeStamp, offset)
-        if timing.presentationTimeStamp.isNegative { return nil }
+        if CMTimeCompare(timing.presentationTimeStamp, .zero) < 0 { return nil }
         timing.decodeTimeStamp = .invalid
         var newBuffer: CMSampleBuffer?
         let created = CMSampleBufferCreateCopyWithNewTiming(
