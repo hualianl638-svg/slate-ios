@@ -463,7 +463,11 @@ final class SLATEExporter {
 
         // ---- 2. 3 秒视频（复用视频导出，只截窗口）----
         // 实况图的视频部分要小一些：3 秒 4K 用 20Mbps 会偏大，这里按 12Mbps。
+        // 实况图的配对视频强制 H.264：
+        // Apple 的实况图配对视频长期以 H.264 为主，部分系统版本对 .pairedVideo
+        // 只接受 H.264（HEVC 虽 iOS 11+ 支持，但配对场景仍有拒收报告）。
         var liveSettings = settings
+        liveSettings.kind = .videoH264
         liveSettings.bitrate = min(settings.bitrate, 12_000_000)
         // 静帧在窗口内的相对位置（重定基后从 0 起算）
         let stillTimeInClip = CMTimeGetSeconds(window.duration) * 0.5
@@ -622,7 +626,7 @@ final class SLATEExporter {
     func saveLivePhotoPair(stillData: Data,
                            videoURL: URL,
                            baseName: String) async throws -> String {
-        try await ensureAddOnlyAccess()
+        try await ensureReadWriteAccess()
 
         // 保存前先校验：宁可给出精确原因，也不要把不合格的资源丢给 Photos
         // （Photos 只会回一个笼统的 PHPhotosErrorDomain 3302）。
@@ -647,34 +651,47 @@ final class SLATEExporter {
         try stillData.write(to: stillURL, options: .atomic)
         defer { try? FileManager.default.removeItem(at: stillURL) }
 
-        let box = Box<String?>(nil)
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            PHPhotoLibrary.shared().performChanges {
-                let request = PHAssetCreationRequest.forAsset()
+        // 静帧两种喂法都试：fileURL 与 data:。系统对实况图较严，
+        // 不同版本接受的形式不同，这里按 fileURL -> data 的顺序回退。
+        var lastError: Error?
+        for useFileURL in [true, false] {
+            let box = Box<String?>(nil)
+            do {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    PHPhotoLibrary.shared().performChanges {
+                        let request = PHAssetCreationRequest.forAsset()
 
-                // 静帧：.photo 资源，必须是 JPEG 或 HEIC
-                let photoOptions = PHAssetResourceCreationOptions()
-                photoOptions.originalFilename = "\(baseName).JPG"
-                photoOptions.shouldMoveFile = false
-                request.addResource(with: .photo, fileURL: stillURL, options: photoOptions)
+                        let photoOptions = PHAssetResourceCreationOptions()
+                        photoOptions.originalFilename = "\(baseName).JPG"
+                        photoOptions.shouldMoveFile = false
+                        if useFileURL {
+                            request.addResource(with: .photo, fileURL: stillURL, options: photoOptions)
+                        } else {
+                            request.addResource(with: .photo, data: stillData, options: photoOptions)
+                        }
 
-                // 视频：.pairedVideo 资源，文件名主干必须与静帧一致
-                let videoOptions = PHAssetResourceCreationOptions()
-                videoOptions.originalFilename = "\(baseName).MOV"
-                videoOptions.shouldMoveFile = false
-                request.addResource(with: .pairedVideo, fileURL: videoURL, options: videoOptions)
+                        let videoOptions = PHAssetResourceCreationOptions()
+                        videoOptions.originalFilename = "\(baseName).MOV"
+                        videoOptions.shouldMoveFile = false
+                        request.addResource(with: .pairedVideo, fileURL: videoURL, options: videoOptions)
 
-                box.value = request.placeholderForCreatedAsset?.localIdentifier
-            } completionHandler: { success, error in
-                if success {
-                    continuation.resume()
-                } else {
-                    let detail = error?.localizedDescription ?? "系统拒绝了实况照片配对写入"
-                    continuation.resume(throwing: ExportError.saveFailed(detail))
+                        box.value = request.placeholderForCreatedAsset?.localIdentifier
+                    } completionHandler: { success, error in
+                        if success {
+                            continuation.resume()
+                        } else {
+                            let detail = error?.localizedDescription ?? "系统拒绝了实况照片配对写入"
+                            continuation.resume(throwing: ExportError.saveFailed(detail))
+                        }
+                    }
                 }
+                return box.value ?? ""
+            } catch {
+                lastError = error
+                continue
             }
         }
-        return box.value ?? ""
+        throw lastError ?? ExportError.saveFailed("实况图配对失败（两种静帧形式均被系统拒绝）")
     }
 
     // MARK: 内部
@@ -732,6 +749,28 @@ final class SLATEExporter {
                     continuation.resume(throwing: ExportError.saveFailed(error?.localizedDescription ?? "未知错误"))
                 }
             }
+        }
+    }
+
+    /// 请求**读写**权限。
+    ///
+    /// 普通照片/视频用"仅添加"即可；实况图配对涉及系统对两个资源的校验，
+    /// 部分系统版本要求读写权限，否则以 3302（资源无效）拒绝。
+    /// 授权类型无法在运行时升级，因此这里直接用 `.readWrite` 请求。
+    func ensureReadWriteAccess() async throws {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        switch status {
+        case .authorized, .limited:
+            return
+        case .notDetermined:
+            let granted = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                PHPhotoLibrary.requestAuthorization(for: .readWrite) { newStatus in
+                    continuation.resume(returning: newStatus == .authorized || newStatus == .limited)
+                }
+            }
+            if !granted { throw ExportError.photoLibraryDenied }
+        default:
+            throw ExportError.photoLibraryDenied
         }
     }
 
