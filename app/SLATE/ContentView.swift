@@ -96,6 +96,75 @@ final class EditorModel: ObservableObject {
         set { state.adjustments.whiteBalance.relativeTintOffset = newValue; requestRender() }
     }
 
+    // MARK: 影调四段
+
+    /// 阴影。
+    var shadows: Double {
+        get { state.adjustments.shadows }
+        set { state.adjustments.shadows = newValue; requestRender() }
+    }
+    /// 高光。
+    var highlights: Double {
+        get { state.adjustments.highlights }
+        set { state.adjustments.highlights = newValue; requestRender() }
+    }
+    /// 黑色色阶。
+    var blacks: Double {
+        get { state.adjustments.blacks }
+        set { state.adjustments.blacks = newValue; requestRender() }
+    }
+    /// 白色色阶。
+    var whites: Double {
+        get { state.adjustments.whites }
+        set { state.adjustments.whites = newValue; requestRender() }
+    }
+
+    // MARK: 色调分离
+
+    /// 阴影染色色相（0...1 色相环）。
+    var shadowHue: Double {
+        get { state.splitToning.shadows.hue }
+        set { state.splitToning.shadows.hue = newValue; requestRender() }
+    }
+    /// 阴影染色饱和度。
+    var shadowSaturation: Double {
+        get { state.splitToning.shadows.saturation }
+        set { state.splitToning.shadows.saturation = newValue; requestRender() }
+    }
+    /// 高光染色色相。
+    var highlightHue: Double {
+        get { state.splitToning.highlights.hue }
+        set { state.splitToning.highlights.hue = newValue; requestRender() }
+    }
+    /// 高光染色饱和度。
+    var highlightSaturation: Double {
+        get { state.splitToning.highlights.saturation }
+        set { state.splitToning.highlights.saturation = newValue; requestRender() }
+    }
+    /// 整体强度（同时作用于阴影与高光）。
+    var splitToneAmount: Double {
+        get { max(state.splitToning.shadows.amount, state.splitToning.highlights.amount) }
+        set {
+            state.splitToning.shadows.amount = newValue
+            state.splitToning.highlights.amount = newValue
+            requestRender()
+        }
+    }
+    /// 色调分离是否已启用。
+    var isSplitToneOn: Bool {
+        get { !state.splitToning.isNeutral }
+        set {
+            if newValue {
+                // 默认给一个可用的配方：阴影偏青、高光偏暖
+                state.splitToning.shadows = SplitToneTarget(hue: 0.55, saturation: 0.5, amount: 0.45, balance: 0)
+                state.splitToning.highlights = SplitToneTarget(hue: 0.08, saturation: 0.4, amount: 0.35, balance: 0)
+            } else {
+                state.splitToning = .neutral
+            }
+            requestRender()
+        }
+    }
+
     // MARK: LUT
 
     /// 当前生效的 LUT 展示名（nil 表示未套用）。
@@ -212,6 +281,7 @@ struct ContentView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
                     header
+                    kernelWarning
                     preview
                         .padding(.top, 14)
                     if let videoInfo {
@@ -226,6 +296,12 @@ struct ContentView: View {
                         .padding(.vertical, 16)
 
                     LUTPanel(store: lutStore, model: model)
+
+                    Divider()
+                        .overlay(Theme.line)
+                        .padding(.vertical, 16)
+
+                    splitToningSection
 
                     Spacer(minLength: 20)
                     importButton
@@ -257,6 +333,33 @@ struct ContentView: View {
                 .foregroundStyle(Theme.log)
         }
         .padding(.top, 6)
+    }
+
+    // MARK: 内核告警
+
+    /// 内核创建失败时显式提示。
+    ///
+    /// 为什么需要这块：Core Image 的 `CIColorKernel(source:)` 在语法错误时只返回 nil，
+    /// 不抛异常。M2 里我把内核类型写成了 Metal 的 `float3`（内核语言应为 `vec3`），
+    /// 结果 S-Log3 解码**静默失效**，界面上完全看不出来。
+    /// 现在失败会在顶部明确显示是哪一项效果缺失。
+    @ViewBuilder
+    private var kernelWarning: some View {
+        let failures = SLATERenderer.shared.kernelFailures
+        if !failures.isEmpty {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.danger)
+                Text("以下效果在本机不可用：\(failures.joined(separator: "、"))。这是渲染内核编译失败，请联系开发者。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .background(Theme.danger.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.top, 10)
+        }
     }
 
     // MARK: 预览
@@ -393,6 +496,14 @@ struct ContentView: View {
                    range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
             slider("对比度", value: Binding(get: { model.contrast }, set: { model.contrast = $0 }),
                    range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
+            slider("阴影", value: Binding(get: { model.shadows }, set: { model.shadows = $0 }),
+                   range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
+            slider("高光", value: Binding(get: { model.highlights }, set: { model.highlights = $0 }),
+                   range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
+            slider("黑色色阶", value: Binding(get: { model.blacks }, set: { model.blacks = $0 }),
+                   range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
+            slider("白色色阶", value: Binding(get: { model.whites }, set: { model.whites = $0 }),
+                   range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
             slider("饱和度", value: Binding(get: { model.saturation }, set: { model.saturation = $0 }),
                    range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
             slider("自然饱和度", value: Binding(get: { model.vibrance }, set: { model.vibrance = $0 }),
@@ -401,6 +512,58 @@ struct ContentView: View {
                    range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
             slider("色调", value: Binding(get: { model.tint }, set: { model.tint = $0 }),
                    range: -1...1, reset: 0, format: { String(format: "%+.2f", $0) })
+        }
+    }
+
+    // MARK: 色调分离
+
+    private var splitToningSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("色调分离")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.text)
+                    Text("阴影与高光分别染色")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.meta)
+                }
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { model.isSplitToneOn },
+                    set: { model.isSplitToneOn = $0 }
+                ))
+                .labelsHidden()
+                .tint(Theme.accent)
+            }
+
+            if model.isSplitToneOn {
+                slider("阴影色相", value: Binding(get: { model.shadowHue }, set: { model.shadowHue = $0 }),
+                       range: 0...1, reset: 0.55, format: { hueName($0) })
+                slider("阴影饱和", value: Binding(get: { model.shadowSaturation }, set: { model.shadowSaturation = $0 }),
+                       range: 0...1, reset: 0, format: { String(format: "%.2f", $0) })
+                slider("高光色相", value: Binding(get: { model.highlightHue }, set: { model.highlightHue = $0 }),
+                       range: 0...1, reset: 0.08, format: { hueName($0) })
+                slider("高光饱和", value: Binding(get: { model.highlightSaturation }, set: { model.highlightSaturation = $0 }),
+                       range: 0...1, reset: 0, format: { String(format: "%.2f", $0) })
+                slider("分离强度", value: Binding(get: { model.splitToneAmount }, set: { model.splitToneAmount = $0 }),
+                       range: 0...1, reset: 0, format: { String(format: "%.2f", $0) })
+            }
+        }
+    }
+
+    /// 把 0...1 色相换算成中文色名，比显示小数更容易理解。
+    private func hueName(_ hue: Double) -> String {
+        switch hue {
+        case ..<0.042: return "红"
+        case ..<0.125: return "橙"
+        case ..<0.208: return "黄"
+        case ..<0.375: return "绿"
+        case ..<0.542: return "青"
+        case ..<0.708: return "蓝"
+        case ..<0.833: return "紫"
+        case ..<0.958: return "洋红"
+        default: return "红"
         }
     }
 
@@ -476,7 +639,7 @@ struct ContentView: View {
     }
 
     private var footnote: some View {
-        Text("M3：已支持 LUT 导入（.cube）与套用强度。视频导出与实况图在 M4。")
+        Text("M4：影调四段 + 色调分离 + LUT 已全部接通。视频与实况图导出为下一里程碑。")
             .font(.system(size: 11))
             .foregroundStyle(Theme.meta)
             .padding(.top, 10)
