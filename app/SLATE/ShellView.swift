@@ -60,6 +60,9 @@ private struct EditorHost: View {
 
     @StateObject private var model: EditorModel
     @StateObject private var lutStore = LUTStore()
+    @Environment(\.scenePhase) private var scenePhase
+    /// 自动保存节流：参数连续变化时最多每 2 秒写一次
+    @State private var lastAutoSave = Date.distantPast
 
     init(payload: LibraryPayload, onClose: @escaping () -> Void) {
         self.payload = payload
@@ -90,8 +93,22 @@ private struct EditorHost: View {
             onClose: onClose
         )
         .onDisappear {
-            // 离开编辑器时把当前调整存下来
+            // 1) 正常离开编辑器
             EditStateStore.shared.save(model.state, for: payload.editKey)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // 2) App 进后台/失活：覆盖被系统回收、从任务切换器杀掉的情况
+            if phase != .active {
+                EditStateStore.shared.save(model.state, for: payload.editKey)
+            }
+        }
+        .onChange(of: model.state) { _, newState in
+            // 3) 操作中防抖保存：覆盖崩溃/被杀，最多每 2 秒写一次
+            let now = Date()
+            if now.timeIntervalSince(lastAutoSave) > 2 {
+                lastAutoSave = now
+                EditStateStore.shared.save(newState, for: payload.editKey)
+            }
         }
     }
 }

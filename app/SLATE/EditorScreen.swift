@@ -1036,6 +1036,8 @@ struct EditorScreen: View {
                 var settings = model.cropMask
                 settings.bypassCrop = false
                 model.cropMask = settings
+                // 4) 点导出即保存：避免导出后 App 被杀导致调整丢失
+                EditStateStore.shared.save(model.state, for: editKey)
                 showExport = true
             }
         }
