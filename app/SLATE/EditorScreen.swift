@@ -478,7 +478,12 @@ struct EditorScreen: View {
         case .off:
             return "未选择曲线"
         case .custom:
-            return model.restoreLUTName.isEmpty ? "未选择 LUT" : model.restoreLUTName
+            guard !model.restoreLUTName.isEmpty else { return "未选择 LUT" }
+            // 文件被删/损坏时给出明确提示，而不是静默不生效
+            if RestoreLUTLibrary.shared.userLUT(named: model.restoreLUTName) == nil {
+                return "\(model.restoreLUTName)（LUT 缺失，请重新导入）"
+            }
+            return model.restoreLUTName
         default:
             return model.logProfile.title
         }

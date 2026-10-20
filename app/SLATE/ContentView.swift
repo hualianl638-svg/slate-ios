@@ -193,6 +193,8 @@ final class EditorModel: ObservableObject {
         get { LogProfile(rawValue: state.logProfileIndex) ?? .off }
         set {
             state.logProfileIndex = newValue.rawValue
+            // 选中曲线即启用；选「关闭」即关闭 —— 避免"选了没反应"
+            state.restoreEnabled = (newValue != .off)
             requestRender()
         }
     }
