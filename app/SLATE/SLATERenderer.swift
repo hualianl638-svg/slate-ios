@@ -301,13 +301,22 @@ final class SLATERenderer {
         // 输入是 log 编码的 R'G'B'（正是视频帧的原始值），
         // 输出即显示参考的 LC-709。之后再把 709 编码转回线性，
         // 让白平衡/曝光仍在线性域计算，与普通照片走同一条链路。
-        let isSLog3Source = state.mediaKind.isMotion
-            && (state.videoColorInfo?.curve == .sLog3)
+        // 灰片还原：按用户在「灰片曲线」里选的类型取对应 LUT
+        let logProfile = LogProfile(rawValue: state.logProfileIndex) ?? .off
 
-        if isSLog3Source, let look = Self.sLog3LookLUT {
+        if let look = RestoreLUTLibrary.shared.restoreLUT(for: logProfile) {
             current = applyLUT(current, lut: look, intensity: 1.0)
             current = current.applyingFilter("CISRGBToneCurveToLinear")
-        } else if isSLog3Source, let colorInfo = state.videoColorInfo, let kernel = slog3Decode {
+        } else if logProfile != .off,
+                  let look = Self.sLog3LookLUT,
+                  state.videoColorInfo?.curve == .sLog3 {
+            // 兜底：曲线选的是 S-Log3 但外部 LUT 取不到时，用内置那份
+            current = applyLUT(current, lut: look, intensity: 1.0)
+            current = current.applyingFilter("CISRGBToneCurveToLinear")
+        } else if state.mediaKind.isMotion,
+                  let colorInfo = state.videoColorInfo,
+                  colorInfo.curve == .sLog3,
+                  let kernel = slog3Decode {
             // 兜底：bundle 里没有官方 LUT 时，退回 ACES IDT 反推链路
             current = kernel.apply(extent: current.extent, arguments: [current]) ?? current
             if colorInfo.colorSpace.requiresGamutConversion {

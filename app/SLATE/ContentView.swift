@@ -186,6 +186,17 @@ final class EditorModel: ObservableObject {
         }
     }
 
+    // MARK: 灰片曲线
+
+    /// 当前选中的灰片曲线。
+    var logProfile: LogProfile {
+        get { LogProfile(rawValue: state.logProfileIndex) ?? .off }
+        set {
+            state.logProfileIndex = newValue.rawValue
+            requestRender()
+        }
+    }
+
     @Published var hslSelectedBand: HSLBandID = .red
 
     /// 选中通道的色相偏移（-1...1，满量程 ±30°）。

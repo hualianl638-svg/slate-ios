@@ -213,7 +213,7 @@ struct EditorScreen: View {
     }
 
     private var badge: some View {
-        Text(videoURL != nil ? (model.isSLog3 ? "S-LOG3" : "709") : "照片")
+        Text(videoURL != nil ? (model.logProfile == .off ? "709" : model.logProfile.title) : "照片")
             .font(.system(size: 9, weight: .bold))
             .tracking(0.4)
             .foregroundStyle(Theme.text)
@@ -226,14 +226,14 @@ struct EditorScreen: View {
     /// 灰片还原开关：点一下在「S-Log3 还原」与「709 直通」之间切换。
     private var pillToggle: some View {
         Button {
-            model.isSLog3.toggle()
+            model.logProfile = (model.logProfile == .off) ? .sLog3 : .off
             playback.refresh()
         } label: {
             HStack(spacing: 5) {
                 Circle()
-                    .fill(model.isSLog3 ? Theme.accent : Theme.meta)
+                    .fill(model.logProfile == .off ? Theme.meta : Theme.accent)
                     .frame(width: 5, height: 5)
-                Text(model.isSLog3 ? "S-Log3" : "709 预览")
+                Text(model.logProfile == .off ? "709 预览" : model.logProfile.title)
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(Theme.text)
             }
@@ -404,40 +404,40 @@ struct EditorScreen: View {
         }
     }
 
-    // MARK: 还原 LUT 开关
+    // MARK: 灰片曲线
 
-    /// 灰片还原 LUT 的总开关（仅视频素材显示）。
+    /// 灰片曲线选择（方案 A：内置官方 LUT；方案 B：自定义还原 LUT）。
     private var restoreBar: some View {
         Group {
             if videoURL != nil {
-                HStack(spacing: 8) {
-                    Image(systemName: "cube.transparent")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(model.isSLog3 ? Theme.accent : Theme.meta)
-
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("还原 LUT")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Theme.text)
-                        Text("SLog3SGamut3.CineToLC-709")
-                            .font(.system(size: 9))
-                            .foregroundStyle(Theme.meta)
+                VStack(alignment: .leading, spacing: 6) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(LogProfile.allCases) { profile in
+                                let isOn = model.logProfile == profile
+                                SLChip(title: profile.title, isOn: isOn, compact: true) {
+                                    model.logProfile = profile
+                                    playback.refresh()
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, SL.pad)
                     }
 
-                    Spacer()
-
-                    Toggle("", isOn: Binding(
-                        get: { model.isSLog3 },
-                        set: { newValue in
-                            model.isSLog3 = newValue
-                            // 预览显示的是播放器帧，必须让播放器重渲当前帧
-                            playback.refresh()
-                        }
-                    ))
-                    .labelsHidden()
-                    .tint(Theme.accent)
+                    if let hint = model.logProfile.missingLUTHint {
+                        Text(hint)
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.danger)
+                            .padding(.horizontal, SL.pad)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if model.logProfile == .custom, let name = RestoreLUTLibrary.shared.customLUTName {
+                        Text("自定义还原 LUT：\(name)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.log)
+                            .padding(.horizontal, SL.pad)
+                    }
                 }
-                .padding(.horizontal, SL.pad)
                 .padding(.vertical, 6)
                 .background(Theme.surface.opacity(0.6))
                 .overlay(alignment: .top) {
@@ -594,6 +594,7 @@ struct EditorScreen: View {
 
                     ForEach(lutStore.items) { item in
                         let isOn = model.activeLUTName == item.name
+                        let isRestore = RestoreLUTLibrary.shared.customLUTName == item.name
                         Button {
                             if let lut = try? lutStore.resolved(item) {
                                 model.applyLUT(lut, name: item.name)
@@ -607,7 +608,30 @@ struct EditorScreen: View {
                                 .padding(.horizontal, 12)
                                 .frame(height: 30)
                                 .background(isOn ? Theme.accent : Theme.surface2, in: Capsule())
-                                .overlay(Capsule().strokeBorder(isOn ? .clear : Theme.line, lineWidth: 0.5))
+                                .overlay(
+                                    Capsule().strokeBorder(
+                                        isRestore ? Theme.log : (isOn ? .clear : Theme.line),
+                                        lineWidth: isRestore ? 1 : 0.5
+                                    )
+                                )
+                                .contextMenu {
+                                    Button {
+                                        let lut = try? lutStore.resolved(item)
+                                        RestoreLUTLibrary.shared.setCustomLUT(lut, name: item.name)
+                                        model.logProfile = .custom
+                                        playback.refresh()
+                                    } label: {
+                                        Label("设为还原 LUT", systemImage: "cube.fill")
+                                    }
+                                    if isRestore {
+                                        Button(role: .destructive) {
+                                            RestoreLUTLibrary.shared.setCustomLUT(nil, name: nil)
+                                            playback.refresh()
+                                        } label: {
+                                            Label("取消还原 LUT", systemImage: "xmark.circle")
+                                        }
+                                    }
+                                }
                         }
                         .buttonStyle(.plain)
                     }

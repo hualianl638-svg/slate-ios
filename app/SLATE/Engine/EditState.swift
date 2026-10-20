@@ -83,6 +83,9 @@ public struct EditState: Identifiable, Equatable, Codable, Sendable {
     /// 导出三条管线自动共用同一份设置（否则三处会不一致）。
     public var cropMask: CropMaskSettings = CropMaskSettings()
 
+    /// 灰片曲线（对数）类型，对应 `LogProfile.rawValue`。
+    public var logProfileIndex: Int = 0
+
     /// 当前序列化版本。新增字段时递增，供迁移使用。
     public static let currentSchemaVersion = 1
 
