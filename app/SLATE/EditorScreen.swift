@@ -711,6 +711,10 @@ struct EditorScreen: View {
                       -1...1, { String(format: "%+.2f", $0) })
             sliderRow("对比度", Binding(get: { model.contrast }, set: { model.contrast = $0 }),
                       -1...1, { String(format: "%+.2f", $0) })
+            sliderRow("高光", Binding(get: { model.highlights }, set: { model.highlights = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
+            sliderRow("阴影", Binding(get: { model.shadows }, set: { model.shadows = $0 }),
+                      -1...1, { String(format: "%+.2f", $0) })
             sliderRow("色温", Binding(get: { model.temperature }, set: { model.temperature = $0 }),
                       -1...1, temperatureLabel)
             sliderRow("色调", Binding(get: { model.tint }, set: { model.tint = $0 }),
