@@ -172,7 +172,6 @@ struct EditorScreen: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            SLIconButton(systemName: "ellipsis", tint: Theme.muted) {}
         }
         .padding(.horizontal, 6)
         .frame(height: 56)
@@ -224,7 +223,8 @@ struct EditorScreen: View {
             }
             .padding(10)
 
-            // 裁剪：画面内拖手柄
+            // 裁剪：画面内拖手柄。
+            // 降低 z 序，避免盖住右下角的「放大 / 对比」按钮导致点不动。
             if tool == .crop {
                 GeometryReader { _ in
                     CropOverlay(
@@ -234,6 +234,7 @@ struct EditorScreen: View {
                         playback.refresh()
                     }
                 }
+                .zIndex(-1)
             }
 
             if model.isRendering {
@@ -427,8 +428,10 @@ struct EditorScreen: View {
                 }
                 .frame(height: geo.size.height)
                 .contentShape(Rectangle())
+                // 手柄手势与进度条手势共用同一坐标系，否则 handle 的局部坐标恒为 0…14
+                .coordinateSpace(name: "timeline")
                 .gesture(
-                    DragGesture(minimumDistance: 0)
+                    DragGesture(minimumDistance: 0, coordinateSpace: .named("timeline"))
                         .onChanged { drag in
                             guard playback.duration > 0 else { return }
                             let ratio = Double(min(1, max(0, drag.location.x / width)))
@@ -461,7 +464,7 @@ struct EditorScreen: View {
             }
             .offset(x: max(0, min(width - 14, x)))
             .gesture(
-                DragGesture(minimumDistance: 0)
+                DragGesture(minimumDistance: 0, coordinateSpace: .named("timeline"))
                     .onChanged { value in
                         let fraction = Double(min(max(0, value.location.x), width) / width)
                         if isStart {
@@ -499,20 +502,14 @@ struct EditorScreen: View {
     /// EditState 只存 LUT 的引用（名称/路径），渲染器需要真实的 LUT3D，
     /// 所以进入编辑器要把引用重新解析一次，否则「上次套的 LUT」会消失。
     private func restoreStyleLUTIfNeeded() {
-        guard !didRestoreStyleLUT else { return }
-        didRestoreStyleLUT = true
-        guard model.activeLUTName == nil,
+        guard !didRestoreStyleLUT, model.activeLUTName == nil,
               let reference = model.state.lut.reference else { return }
         guard let item = lutStore.items.first(where: { $0.name == reference.displayName }),
               let lut = try? lutStore.resolved(item) else { return }
 
-        // applyLUT 会把强度重置为 1，这里还原存档里的强度
-        let savedIntensity = EditStateStore.shared.savedLUTIntensity(for: editKey)
         model.applyLUT(lut, name: item.name)
-        if let savedIntensity {
-            model.lutIntensity = savedIntensity
-        }
         playback.refresh()
+        didRestoreStyleLUT = true
     }
 
     /// 把播放头限制在选段内。
@@ -639,15 +636,16 @@ struct EditorScreen: View {
         }
     }
 
-    /// 左上角标：视频显示 709/曲线名，图片显示 照片/曲线名。
+    /// 左上角标：只有**开关打开**时才显示曲线名，否则显示默认态。
     private var badgeText: String {
-        if model.logProfile != .off {
+        if model.restoreEnabled, model.logProfile != .off {
             return model.logProfile.title
         }
         return videoURL != nil ? "709" : "照片"
     }
 
     private var restoreTitle: String {
+        guard model.restoreEnabled else { return "已关闭" }
         switch model.logProfile {
         case .off:
             return "未选择曲线"
@@ -1027,6 +1025,9 @@ struct EditorScreen: View {
     private var bottomBar: some View {
         HStack(spacing: 12) {
             SLTextButton(title: "重置") {
+                // 重置后退出裁剪工具：否则 bypassCrop 与 tool 状态不一致，
+                // 再拖手柄会按整幅坐标映射到已裁剪的画面上
+                tool = .basic
                 model.reset()
                 playback.refresh()
             }

@@ -137,6 +137,17 @@ final class SLATEExporter {
             throw ExportError.writerFailed("素材尺寸异常（\(outWidth)×\(outHeight)）")
         }
 
+        // 画布必须按**裁剪后**的尺寸算。
+        // 之前用源尺寸当画布，而逐帧渲染出来的是裁剪后的图，
+        // render(into:) 会把裁剪结果用 sx≠sy 非等比拉伸回满画布 —— 成片画面变形。
+        let exportCrop = state.cropMask
+        if !exportCrop.bypassCrop, exportCrop.isCropActive {
+            outWidth = max(2, Int(Double(outWidth) * exportCrop.cropWidth))
+            outHeight = max(2, Int(Double(outHeight) * exportCrop.cropHeight))
+        }
+        if outWidth % 2 != 0 { outWidth -= 1 }
+        if outHeight % 2 != 0 { outHeight -= 1 }
+
         let outURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SLATE-\(Self.stamp()).mov")
         try? FileManager.default.removeItem(at: outURL)
@@ -315,6 +326,18 @@ final class SLATEExporter {
             writerInput.requestMediaDataWhenReady(on: queue) {
                 while writerInput.isReadyForMoreMediaData {
                     guard let sample = readerOutput.copyNextSampleBuffer() else {
+                        // 读取失败（源损坏、iCloud 未下载、timeRange 越界）不能当成"正常读完"
+                        if reader.status == .failed {
+                            finishWithError(ExportError.readerFailed(
+                                reader.error?.localizedDescription ?? "读取中断"
+                            ))
+                            return
+                        }
+                        // 一帧都没写进去时也不能当成功
+                        guard frameIndex > 0 else {
+                            finishWithError(ExportError.writerFailed("没有读到任何视频帧"))
+                            return
+                        }
                         // 视频读完：排空音频后收尾
                         writerInput.markAsFinished()
                         if let audioOut = audioReaderOutput, let audioIn = audioWriterInput {

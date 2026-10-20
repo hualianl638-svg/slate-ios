@@ -86,12 +86,32 @@ struct CropOverlay: View {
 
     // MARK: 几何
 
+    /// 画面在预览区里 scaledToFit 之后的实际绘制矩形。
+    /// 之前直接用整个预览区尺寸，letterbox 的黑边也被算进裁剪框，
+    /// 于是竖屏素材选 1:1 看到的框不是正方形、和实际裁剪结果对不上。
+    private func fittedRect(in size: CGSize) -> CGRect {
+        let aspect = max(sourceAspect, 0.0001)
+        var width = size.width
+        var height = width / aspect
+        if height > size.height {
+            height = size.height
+            width = height * aspect
+        }
+        return CGRect(
+            x: (size.width - width) / 2,
+            y: (size.height - height) / 2,
+            width: width,
+            height: height
+        )
+    }
+
     private func viewRect(in size: CGSize) -> CGRect {
-        CGRect(
-            x: CGFloat(settings.cropX) * size.width,
-            y: CGFloat(settings.cropY) * size.height,
-            width: CGFloat(settings.cropWidth) * size.width,
-            height: CGFloat(settings.cropHeight) * size.height
+        let base = fittedRect(in: size)
+        return CGRect(
+            x: base.minX + CGFloat(settings.cropX) * base.width,
+            y: base.minY + CGFloat(settings.cropY) * base.height,
+            width: CGFloat(settings.cropWidth) * base.width,
+            height: CGFloat(settings.cropHeight) * base.height
         )
     }
 
@@ -102,8 +122,9 @@ struct CropOverlay: View {
             .onChanged { value in
                 let start = startRect ?? currentRect()
                 if startRect == nil { startRect = start }
-                let dx = value.translation.width / max(size.width, 1)
-                let dy = value.translation.height / max(size.height, 1)
+                let base = fittedRect(in: size)
+                let dx = value.translation.width / max(base.width, 1)
+                let dy = value.translation.height / max(base.height, 1)
                 var rect = start
                 rect.origin.x = min(max(start.minX + dx, 0), 1 - start.width)
                 rect.origin.y = min(max(start.minY + dy, 0), 1 - start.height)
@@ -120,8 +141,9 @@ struct CropOverlay: View {
             .onChanged { value in
                 let start = startRect ?? currentRect()
                 if startRect == nil { startRect = start }
-                let dx = value.translation.width / max(size.width, 1)
-                let dy = value.translation.height / max(size.height, 1)
+                let base = fittedRect(in: size)
+                let dx = value.translation.width / max(base.width, 1)
+                let dy = value.translation.height / max(base.height, 1)
 
                 var minX = start.minX
                 var minY = start.minY
