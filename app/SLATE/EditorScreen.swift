@@ -64,7 +64,9 @@ struct EditorScreen: View {
         GeometryReader { proxy in
             VStack(spacing: 0) {
                 nav
-                    .padding(.top, proxy.safeAreaInsets.top > 0 ? 0 : 12)
+                    // 系统已给安全区时 proxy 有值（不再补）；
+                    // fullScreenCover 下 inset 常为 0，此时用窗口真实值（灵动岛机型约 59pt）
+                    .padding(.top, max(0, deviceTopInset - proxy.safeAreaInsets.top))
                 preview
                 if videoURL != nil {
                     timeline
@@ -680,6 +682,19 @@ struct EditorScreen: View {
     }
 
     // MARK: 裁剪 / 蒙版面板
+
+    /// 设备顶部的**真实**安全区高度。
+    ///
+    /// `fullScreenCover` 呈现时 SwiftUI 偶尔不向下传递安全区（GeometryReader 里读到 0），
+    /// 内容就会从 y=0 开始排、和状态栏叠在一起。这里直接向窗口要真实 inset，
+    /// 与 SwiftUI 已给出的 inset 做差，两种情形都不会重复留白。
+    private var deviceTopInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }?
+            .safeAreaInsets.top ?? 0
+    }
 
     /// 源图的有效宽高比（旋转 90°/270° 时取倒数）。
     ///
