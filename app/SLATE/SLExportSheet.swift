@@ -23,8 +23,6 @@ struct SLExportSheet: View {
     @State private var quality: Double = 95
     @State private var bitrateMbps: Double = 20
     @State private var liveDuration: Double = 3.0
-    /// 实况图片段起点（0 素材开头，1 素材结尾）。
-    @State private var liveStart: Double = 0
     @State private var isExporting = false
     @State private var progress: Double = 0
     @State private var resultText: String?
@@ -203,17 +201,11 @@ struct SLExportSheet: View {
                 Slider(value: $liveDuration, in: 2...5, step: 0.5).tint(Theme.accent)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                row(title: "片段起点", value: String(format: "%.0f%%", liveStart * 100))
-                Slider(value: $liveStart, in: 0...1, step: 0.01).tint(Theme.accent)
-                Text("0% = 素材开头，100% = 素材结尾（超出时长会自动夹取）")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.meta)
-            }
 
-            Text("静帧取片段的中间帧，配对视频为 H.264。")
+            Text("片段取自视频的「选段裁剪」：在选段内居中截取，静帧为片段中间帧。（配对视频为 H.264）")
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.meta)
+                .fixedSize(horizontal: false, vertical: true)
 
             estimateRow(text: "预计大小", value: "—")
         }
@@ -389,7 +381,6 @@ struct SLExportSheet: View {
                     sourceURL: url, state: model.state, lut: model.currentLUT,
                     settings: settings,
                     targetDuration: liveDuration,
-                    startFraction: liveStart,
                     stillPosition: 0.5
                 ) { value in
                     progress = value

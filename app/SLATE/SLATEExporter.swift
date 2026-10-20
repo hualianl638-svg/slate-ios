@@ -456,7 +456,6 @@ final class SLATEExporter {
                          lut: LUT3D?,
                          settings: ExportSettings,
                          targetDuration: Double = 3.0,
-                         startFraction: Double = 0,
                          stillPosition: Double = 0.5,
                          progress: @escaping (Double) -> Void) async throws -> URL {
 
@@ -464,11 +463,19 @@ final class SLATEExporter {
             AVURLAssetPreferPreciseDurationAndTimingKey: true,
         ])
         let duration = try await asset.load(.duration)
-        // 片段：由「起点比例 + 时长」决定（时长限制在 2~5 秒，并按素材总长夹取）
-        let window = Self.livePhotoWindow(
-            assetDuration: duration,
-            target: targetDuration,
-            startFraction: startFraction
+        // 片段范围来自视频的「选段裁剪」：实况图不再单独设起点，
+        // 直接取选段内居中、时长 2~5 秒的一段。
+        let total = CMTimeGetSeconds(duration)
+        let rangeStartFraction = min(max(state.trimStart, 0), 0.98)
+        let rangeEndFraction = min(max(state.trimEnd, rangeStartFraction + 0.02), 1)
+        let rangeStart = total * rangeStartFraction
+        let rangeLength = max(0.1, total * (rangeEndFraction - rangeStartFraction))
+        let wanted = min(max(targetDuration, 2.0), 5.0)
+        let windowDuration = min(wanted, rangeLength)
+        let windowStart = rangeStart + max(0, (rangeLength - windowDuration) / 2)
+        let window = CMTimeRange(
+            start: CMTime(seconds: windowStart, preferredTimescale: 600),
+            duration: CMTime(seconds: windowDuration, preferredTimescale: 600)
         )
         // 静帧位置：0 = 窗口开头，1 = 窗口结尾（默认 0.5 即中点）
         let clampedPosition = min(max(stillPosition, 0), 1)

@@ -182,9 +182,12 @@ struct EditorScreen: View {
             VStack(spacing: 0) {
                 HStack(alignment: .top, spacing: 8) {
                     VStack(alignment: .leading, spacing: 6) {
-                        badge
+                        // 视频只留可点击的胶囊（信息重复的静态角标已移除）；
+                        // 图片没有胶囊，角标用于显示「照片 / 曲线名」。
                         if videoURL != nil {
                             pillToggle
+                        } else {
+                            badge
                         }
                     }
                     Spacer(minLength: 4)
@@ -448,11 +451,24 @@ struct EditorScreen: View {
                         }
                         syncTrim()
                     }
+                    .onEnded { _ in
+                        // 松手后把播放头拉回选区内，避免停留在被裁掉的区域
+                        clampPlayheadToTrim()
+                    }
             )
     }
 
     private func syncTrim() {
         playback.applyTrim(start: model.trimStart, end: model.trimEnd)
+    }
+
+    /// 把播放头限制在选段内。
+    private func clampPlayheadToTrim() {
+        guard playback.duration > 0 else { return }
+        let fraction = min(max(playback.progress, model.trimStart), model.trimEnd)
+        if abs(fraction - playback.progress) > 0.001 {
+            playback.seek(to: fraction * playback.duration)
+        }
     }
 
     /// 选段摘要：起止时间 + 时长。
