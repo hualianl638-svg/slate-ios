@@ -18,6 +18,7 @@ struct RestoreLUTPicker: View {
     @State private var showImporter = false
     @State private var errorText: String?
     @State private var userLUTs: [RestoreLUTLibrary.UserLUT] = []
+    @State private var pendingDelete: RestoreLUTLibrary.UserLUT?
 
     var body: some View {
         NavigationStack {
@@ -48,6 +49,24 @@ struct RestoreLUTPicker: View {
             }
             .fileImporter(isPresented: $showImporter, allowedContentTypes: [.data]) { result in
                 handleImport(result)
+            }
+            .confirmationDialog(
+                pendingDelete.map { "删除「\($0.name)」？" } ?? "",
+                isPresented: Binding(
+                    get: { pendingDelete != nil },
+                    set: { if !$0 { pendingDelete = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("删除", role: .destructive) {
+                    if let lut = pendingDelete {
+                        delete(lut)
+                    }
+                    pendingDelete = nil
+                }
+                Button("取消", role: .cancel) { pendingDelete = nil }
+            } message: {
+                Text("删除后需要重新导入该 .cube 才能再使用。")
             }
         }
         .onAppear { reload() }
@@ -98,15 +117,7 @@ struct RestoreLUTPicker: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(userLUTs) { lut in
-                    row(title: lut.name,
-                        subtitle: "我的还原 LUT",
-                        selected: model.logProfile == .custom && model.restoreLUTName == lut.name,
-                        badge: nil) {
-                        model.restoreLUTName = lut.name
-                        model.logProfile = .custom
-                        onChange()
-                        dismiss()
-                    }
+                    userRow(lut)
                 }
             }
 
@@ -174,6 +185,68 @@ struct RestoreLUTPicker: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    /// 我的还原 LUT 行：左侧点选，右侧删除。
+    private func userRow(_ lut: RestoreLUTLibrary.UserLUT) -> some View {
+        let selected = model.logProfile == .custom && model.restoreLUTName == lut.name
+        return HStack(spacing: 0) {
+            Button {
+                model.restoreLUTName = lut.name
+                model.logProfile = .custom
+                onChange()
+                dismiss()
+            } label: {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(lut.name)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Theme.text)
+                            .lineLimit(1)
+                        Text("我的还原 LUT")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.meta)
+                    }
+                    Spacer(minLength: 8)
+                    if selected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Theme.accent)
+                    }
+                }
+                .padding(.leading, 14)
+                .frame(height: 52)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                pendingDelete = lut
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.danger)
+                    .frame(width: 48, height: 52)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: SL.rSmall, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: SL.rSmall, style: .continuous)
+                .strokeBorder(selected ? Theme.accent.opacity(0.6) : Theme.line, lineWidth: selected ? 1 : 0.5)
+        )
+    }
+
+    private func delete(_ lut: RestoreLUTLibrary.UserLUT) {
+        RestoreLUTLibrary.shared.deleteUserLUT(named: lut.name)
+        // 删掉的正好是当前选中的 -> 清空选择，避免界面显示一个不存在的名字
+        if model.restoreLUTName == lut.name {
+            model.restoreLUTName = ""
+            model.logProfile = .off
+            onChange()
+        }
+        reload()
     }
 
     // MARK: 逻辑

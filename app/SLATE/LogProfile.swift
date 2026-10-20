@@ -42,6 +42,8 @@ enum LogProfile: Int, CaseIterable, Identifiable {
         switch self {
         case .sLog3: return "SLog3SGamut3.CineToLC-709"
         case .cLog3: return "CinemaGamut_CanonLog3-to-Canon709_33_Ver.1.0"
+        case .fLog2: return "FLog2_to_709_33"
+        case .nLog: return "NLog_BT2020_to_Rec709_33"
         default: return nil
         }
     }
