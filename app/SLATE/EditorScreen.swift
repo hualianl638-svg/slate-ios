@@ -106,6 +106,9 @@ struct EditorScreen: View {
             }
         }
         .onDisappear {
+            // 手指滑出按钮区域时 onEnded 可能不触发，离开页面时强制复位
+            comparing = false
+            playback.bypassGrading = false
             playback.teardown()
             didConfigurePlayback = false
         }
@@ -239,7 +242,7 @@ struct EditorScreen: View {
     }
 
     private var badge: some View {
-        Text(videoURL != nil ? (model.logProfile == .off ? "709" : model.logProfile.title) : "照片")
+        Text(badgeText)
             .font(.system(size: 9, weight: .bold))
             .tracking(0.4)
             .foregroundStyle(Theme.text)
@@ -447,63 +450,68 @@ struct EditorScreen: View {
     // MARK: 还原 LUT 工具条
 
     /// 左侧入口选择曲线，右侧开关控制是否启用。
+    /// 视频与图片都显示 —— 相机的 S-Log3 照片同样需要还原。
     private var restoreBar: some View {
-        Group {
-            if videoURL != nil {
-                HStack(spacing: 10) {
-                    Button {
-                        showRestorePicker = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "cube.transparent")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(model.restoreEnabled ? Theme.accent : Theme.meta)
+        HStack(spacing: 10) {
+            Button {
+                showRestorePicker = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "cube.transparent")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(model.restoreEnabled ? Theme.accent : Theme.meta)
 
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("还原 LUT")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(Theme.text)
-                                Text(restoreTitle)
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Theme.meta)
-                                    .lineLimit(1)
-                            }
-
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(Theme.meta)
-                        }
-                        .contentShape(Rectangle())
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("还原 LUT")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Theme.text)
+                        Text(restoreTitle)
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.meta)
+                            .lineLimit(1)
                     }
-                    .buttonStyle(.plain)
 
-                    Spacer(minLength: 8)
-
-                    Toggle("", isOn: Binding(
-                        get: { model.restoreEnabled },
-                        set: { newValue in
-                            if newValue, model.logProfile == .off {
-                                // 开关打开但没选曲线时，默认选 S-Log3
-                                model.logProfile = .sLog3
-                            }
-                            model.restoreEnabled = newValue
-                            playback.refresh()
-                        }
-                    ))
-                    .labelsHidden()
-                    .tint(Theme.accent)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.meta)
                 }
-                .padding(.horizontal, SL.pad)
-                .padding(.vertical, 8)
-                .background(Theme.surface.opacity(0.6))
-                .overlay(alignment: .top) {
-                    Rectangle().fill(Theme.line).frame(height: 0.5)
-                }
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(Theme.line).frame(height: 0.5)
-                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 8)
+
+            Toggle("", isOn: Binding(
+                get: { model.restoreEnabled },
+                set: { newValue in
+                    if newValue, model.logProfile == .off {
+                        model.logProfile = .sLog3
+                    }
+                    model.restoreEnabled = newValue
+                    model.requestRender()
+                    playback.refresh()
+                }
+            ))
+            .labelsHidden()
+            .tint(Theme.accent)
         }
+        .padding(.horizontal, SL.pad)
+        .padding(.vertical, 8)
+        .background(Theme.surface.opacity(0.6))
+        .overlay(alignment: .top) {
+            Rectangle().fill(Theme.line).frame(height: 0.5)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.line).frame(height: 0.5)
+        }
+    }
+
+    /// 左上角标：视频显示 709/曲线名，图片显示 照片/曲线名。
+    private var badgeText: String {
+        if model.logProfile != .off {
+            return model.logProfile.title
+        }
+        return videoURL != nil ? "709" : "照片"
     }
 
     private var restoreTitle: String {
