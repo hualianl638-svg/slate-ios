@@ -58,18 +58,24 @@ struct EditorScreen: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            nav
-            preview
-            if videoURL != nil {
-                timeline
+        // 用 GeometryReader 拿真实安全区：
+        // fullScreenCover 下若上层没有传递安全区，导航栏会直接贴到状态栏上。
+        // 这里按实际 inset 补顶部留白，横竖屏都成立。
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                nav
+                    .padding(.top, proxy.safeAreaInsets.top > 0 ? 0 : 12)
+                preview
+                if videoURL != nil {
+                    timeline
+                }
+                toolstrip
+                restoreBar
+                panelWrap
+                bottomBar
             }
-            toolstrip
-            restoreBar
-            panelWrap
-            bottomBar
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.bg.ignoresSafeArea())
         .sheet(isPresented: $showExport) {
             SLExportSheet(model: model, lutStore: lutStore)
@@ -117,11 +123,16 @@ struct EditorScreen: View {
     private var nav: some View {
         HStack(spacing: 4) {
             Button(action: onClose) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Theme.text)
-                    .frame(width: SL.touch, height: SL.touch)
-                    .contentShape(Rectangle())
+                HStack(spacing: 2) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                    Text("返回")
+                        .font(.system(size: 14, weight: .medium))
+                }
+                .foregroundStyle(Theme.text)
+                .padding(.horizontal, 8)
+                .frame(height: SL.touch)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
@@ -139,10 +150,12 @@ struct EditorScreen: View {
 
             SLIconButton(systemName: "ellipsis", tint: Theme.muted) {}
         }
-        .padding(.horizontal, 4)
-        .frame(height: 52)
-        // 竖屏时确保返回按钮始终在可点区域内
+        .padding(.horizontal, 6)
+        .frame(height: 56)
         .background(Theme.bg)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.line).frame(height: 0.5)
+        }
     }
 
     // MARK: 预览
