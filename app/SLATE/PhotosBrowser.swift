@@ -205,7 +205,8 @@ final class PhotoLibraryBrowser: ObservableObject {
                 title: asset.creationDate.map { Self.dateFormatter.string(from: $0) } ?? "视频",
                 subtitle: parts.isEmpty ? "视频" : parts.joined(separator: " · "),
                 isLogLikely: false,
-                detectionNote: nil
+                detectionNote: nil,
+                editKey: asset.localIdentifier
             )
         } else {
             guard let image = await requestFullImage(for: asset, isVideo: false) else { return nil }
@@ -216,7 +217,8 @@ final class PhotoLibraryBrowser: ObservableObject {
                 title: asset.creationDate.map { Self.dateFormatter.string(from: $0) } ?? "照片",
                 subtitle: "\(Int(image.size.width)) × \(Int(image.size.height))",
                 isLogLikely: false,
-                detectionNote: nil
+                detectionNote: nil,
+                editKey: asset.localIdentifier
             )
         }
     }

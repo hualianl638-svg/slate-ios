@@ -73,6 +73,10 @@ private struct EditorHost: View {
             // 自动识别已关闭：灰片还原一律默认关，由用户手动打开还原开关。
             model.isSLog3 = false
         }
+        // 恢复该素材上次的调整
+        if let saved = EditStateStore.shared.restore(for: payload.editKey) {
+            model.restore(saved)
+        }
         _model = StateObject(wrappedValue: model)
     }
 
@@ -85,5 +89,9 @@ private struct EditorHost: View {
             videoURL: payload.videoURL,
             onClose: onClose
         )
+        .onDisappear {
+            // 离开编辑器时把当前调整存下来
+            EditStateStore.shared.save(model.state, for: payload.editKey)
+        }
     }
 }

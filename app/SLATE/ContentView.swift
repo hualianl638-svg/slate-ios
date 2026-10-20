@@ -236,6 +236,12 @@ final class EditorModel: ObservableObject {
         state.trimEnd = e
     }
 
+    /// 用上次保存的调整覆盖当前状态。
+    func restore(_ saved: EditState) {
+        state = saved
+        requestRender()
+    }
+
     @Published var hslSelectedBand: HSLBandID = .red
 
     /// 选中通道的色相偏移（-1...1，满量程 ±30°）。

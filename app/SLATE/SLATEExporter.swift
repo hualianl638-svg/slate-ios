@@ -470,6 +470,13 @@ final class SLATEExporter {
         let rangeEndFraction = min(max(state.trimEnd, rangeStartFraction + 0.02), 1)
         let rangeStart = total * rangeStartFraction
         let rangeLength = max(0.1, total * (rangeEndFraction - rangeStartFraction))
+
+        // 选段太短时明确拒绝，而不是产出一个系统会拒收的过短配对视频
+        guard rangeLength >= 2.0 else {
+            throw ExportError.saveFailed(
+                String(format: "选段太短：实况图至少需要 2 秒（当前选段 %.1f 秒）", rangeLength)
+            )
+        }
         let wanted = min(max(targetDuration, 2.0), 5.0)
         let windowDuration = min(wanted, rangeLength)
         let windowStart = rangeStart + max(0, (rangeLength - windowDuration) / 2)
@@ -545,174 +552,6 @@ final class SLATEExporter {
             .appendingPathComponent("\(baseName).jpg")
         try? stillData.write(to: stillURL, options: .atomic)
         return stillURL
-    }
-
-    /// 计算实况图时间窗：时长 2~5 秒，起点由 `startFraction` 决定。
-    static func livePhotoWindow(assetDuration: CMTime,
-                                target: Double = 3.0,
-                                startFraction: Double = 0) -> CMTimeRange {
-        let total = CMTimeGetSeconds(assetDuration)
-        guard total.isFinite, total > 0 else {
-            return CMTimeRange(start: .zero, duration: CMTime(seconds: 1, preferredTimescale: 600))
-        }
-        let clampedTarget = min(max(target, 2.0), 5.0)
-        let windowDuration = min(clampedTarget, total)
-        let fraction = min(max(startFraction, 0), 1)
-        // 起点在「0 ～ 总长-片长」之间滑动
-        let maxStart = max(0, total - windowDuration)
-        let start = maxStart * fraction
-        return CMTimeRange(
-            start: CMTime(seconds: start, preferredTimescale: 600),
-            duration: CMTime(seconds: windowDuration, preferredTimescale: 600)
-        )
-    }
-
-    /// 内容标识符元数据（`com.apple.quicktime.content.identifier`）。
-    private static func contentIdentifierMetadata(_ identifier: String) -> AVMetadataItem {
-        let item = AVMutableMetadataItem()
-        item.key = "com.apple.quicktime.content.identifier" as NSString
-        item.keySpace = AVMetadataKeySpace(rawValue: "mdta")
-        item.value = identifier as NSString
-        item.dataType = "com.apple.metadata.datatype.UTF-8"
-        return item
-    }
-
-    /// 把配对标识符写进 JPEG 的 MakerApple 字典（key "17"）。
-    ///
-    /// 这是实况图配对的另一半：Photos 会拿视频里的 content.identifier
-    /// 与静帧 MakerApple[17] 比对，一致才认成一对。用 UIImage.jpegData 做不到，
-    /// 必须走 CGImageDestination 才能写入 EXIF MakerApple 字典。
-    static func jpegDataWithAssetIdentifier(_ image: UIImage,
-                                            identifier: String,
-                                            quality: Double) -> Data? {
-        guard let cgImage = image.cgImage else { return nil }
-        let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(
-            output, "public.jpeg" as CFString, 1, nil
-        ) else { return nil }
-        let properties: [String: Any] = [
-            kCGImageDestinationLossyCompressionQuality as String: quality,
-            kCGImagePropertyMakerAppleDictionary as String: ["17": identifier],
-        ]
-        CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return output as Data
-    }
-
-    /// 构造 still-image-time 的元数据格式描述。
-    ///
-    /// 对应 QuickTime 的 `com.apple.quicktime.still-image-time`，
-    /// 数据类型是 8 位有符号整数（Apple 的实况图示例即此约定）。
-    private static func makeStillImageTimeFormatDescription() -> CMMetadataFormatDescription? {
-        // 注意两个格式细节（照 Apple 实况图示例）：
-        //  · 标识符必须写成 "mdta/com.apple.quicktime.still-image-time"
-        //  · 数据类型是 "com.apple.metadata.datatype.int8"，不是 kCMMetadataBaseDataType_SInt8 的原值
-        let spec: [String: Any] = [
-            kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as String:
-                "mdta/com.apple.quicktime.still-image-time",
-            kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType as String:
-                "com.apple.metadata.datatype.int8",
-        ]
-        var format: CMMetadataFormatDescription?
-        let status = CMMetadataFormatDescriptionCreateWithMetadataSpecifications(
-            allocator: kCFAllocatorDefault,
-            metadataType: kCMMetadataFormatType_Boxed,
-            metadataSpecifications: [spec] as CFArray,
-            formatDescriptionOut: &format
-        )
-        return status == noErr ? format : nil
-    }
-
-    /// 构造一条 still-image-time 元数据样本（1 字节，值为 0）。
-    private static func makeStillImageTimeSampleBuffer(
-        formatDescription: CMMetadataFormatDescription,
-        time: CMTime
-    ) -> CMSampleBuffer? {
-        var blockBuffer: CMBlockBuffer?
-        let blockStatus = CMBlockBufferCreateWithMemoryBlock(
-            allocator: kCFAllocatorDefault,
-            memoryBlock: nil,
-            blockLength: 1,
-            blockAllocator: kCFAllocatorDefault,
-            customBlockSource: nil,
-            offsetToData: 0,
-            dataLength: 1,
-            flags: 0,
-            blockBufferOut: &blockBuffer
-        )
-        guard blockStatus == kCMBlockBufferNoErr, let block = blockBuffer else { return nil }
-
-        var value: Int8 = 0
-        let copyStatus = withUnsafeBytes(of: &value) { raw -> OSStatus in
-            guard let base = raw.baseAddress else { return -1 }
-            return CMBlockBufferReplaceDataBytes(
-                with: base,
-                blockBuffer: block,
-                offsetIntoDestination: 0,
-                dataLength: 1
-            )
-        }
-        guard copyStatus == kCMBlockBufferNoErr else { return nil }
-
-        var sampleBuffer: CMSampleBuffer?
-        var timing = CMSampleTimingInfo(
-            duration: .invalid,
-            presentationTimeStamp: time,
-            decodeTimeStamp: .invalid
-        )
-        var sampleSize = 1
-        let createStatus = CMSampleBufferCreate(
-            allocator: kCFAllocatorDefault,
-            dataBuffer: block,
-            dataReady: true,
-            makeDataReadyCallback: nil,
-            refcon: nil,
-            formatDescription: formatDescription,
-            sampleCount: 1,
-            sampleTimingEntryCount: 1,
-            sampleTimingArray: &timing,
-            sampleSizeEntryCount: 1,
-            sampleSizeArray: &sampleSize,
-            sampleBufferOut: &sampleBuffer
-        )
-        return createStatus == noErr ? sampleBuffer : nil
-    }
-
-    /// 把时间戳整体平移，使输出片段从 0 开始。
-    ///
-    /// 音频样本用 `CMSampleBufferCreateCopyWithNewTiming` 改时间轴；
-    /// 失败就返回 nil（丢掉该样本），不让整段导出失败。
-    private static func retimed(_ sample: CMSampleBuffer, subtracting offset: CMTime) -> CMSampleBuffer? {
-        if offset == .zero { return sample }
-        var timing = CMSampleTimingInfo()
-        let status = CMSampleBufferGetSampleTimingInfo(sample, at: 0, timingInfoOut: &timing)
-        guard status == noErr else { return nil }
-        timing.presentationTimeStamp = CMTimeSubtract(timing.presentationTimeStamp, offset)
-        if CMTimeCompare(timing.presentationTimeStamp, .zero) < 0 { return nil }
-        timing.decodeTimeStamp = .invalid
-        var newBuffer: CMSampleBuffer?
-        let created = CMSampleBufferCreateCopyWithNewTiming(
-            allocator: kCFAllocatorDefault,
-            sampleBuffer: sample,
-            sampleTimingEntryCount: 1,
-            sampleTimingArray: &timing,
-            sampleBufferOut: &newBuffer
-        )
-        guard created == noErr else { return nil }
-        return newBuffer
-    }
-
-    /// 校验一个视频文件能被当作实况图的配对视频：可播放、有视频轨、时长合理。
-    private static func validateVideo(url: URL) async throws -> Bool {
-        let asset = AVURLAsset(url: url)
-        guard let tracks = try? await asset.loadTracks(withMediaType: .video), !tracks.isEmpty else {
-            return false
-        }
-        guard let duration = try? await asset.load(.duration) else { return false }
-        let seconds = CMTimeGetSeconds(duration)
-        guard seconds.isFinite, seconds > 0.3, seconds < 30 else { return false }
-        let playable = (try? await asset.load(.isPlayable)) ?? false
-        return playable
     }
 
     /// 把「静帧 + 视频」作为一对实况照片写入相册。

@@ -23,6 +23,8 @@ struct LibraryPayload {
     var isLogLikely: Bool = false
     /// 识别说明，用于界面提示（如「10bit ITU_R_709_2 · 灰片」）。
     var detectionNote: String?
+    /// 用于按素材保存/恢复调整的稳定键。
+    var editKey: String = ""
 }
 
 /// 图库条目。
@@ -75,7 +77,8 @@ final class LibraryStore: ObservableObject {
                     title: movie.url.deletingPathExtension().lastPathComponent,
                     subtitle: subtitleParts.joined(separator: " · "),
                     isLogLikely: false,
-                    detectionNote: note
+                    detectionNote: note,
+                    editKey: movie.url.lastPathComponent
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
             } else {
@@ -88,7 +91,8 @@ final class LibraryStore: ObservableObject {
                     isVideo: false,
                     videoURL: nil,
                     title: "照片",
-                    subtitle: "\(Int(image.size.width)) × \(Int(image.size.height))"
+                    subtitle: "\(Int(image.size.width)) × \(Int(image.size.height))",
+                    editKey: "photo-\(Int(image.size.width))x\(Int(image.size.height))-\(data.count)"
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
             }
