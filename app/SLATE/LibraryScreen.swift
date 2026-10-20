@@ -127,7 +127,7 @@ final class LibraryStore: ObservableObject {
         return day
     }
 
-    private static func poster(for url: URL) async throws -> UIImage {
+    private nonisolated static func poster(for url: URL) async throws -> UIImage {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -136,7 +136,7 @@ final class LibraryStore: ObservableObject {
         return UIImage(cgImage: cgImage)
     }
 
-    private static func shortSize(of url: URL) -> String {
+    private nonisolated static func shortSize(of url: URL) -> String {
         let attributes = (try? FileManager.default.attributesOfItem(atPath: url.path)) ?? [:]
         let bytes = (attributes[.size] as? Int) ?? 0
         let mb = Double(bytes) / (1024 * 1024)
@@ -159,14 +159,6 @@ struct LibraryScreen: View {
 
     @State private var pickerItem: PhotosPickerItem?
     @State private var filter: Filter = .all
-    @StateObject private var browser = PhotoLibraryBrowser()
-
-    /// 素材来源：本机导入 / iOS 照片图库。
-    enum Source: Hashable {
-        case local, photos
-        var title: String { self == .local ? "本机" : "照片图库" }
-    }
-    @State private var source: Source = .local
     @State private var showImporter = false
 
     enum Filter: Hashable {
@@ -189,19 +181,19 @@ struct LibraryScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if source == .photos {
-                PhotosBrowserView(browser: browser) { payload in
-                    onOpen(payload)
-                }
-            } else {
-                scroll
-            }
+            scroll
         }
         .photosPicker(isPresented: $showImporter, selection: $pickerItem, matching: .any(of: [.images, .videos]))
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }
-            Task { await store.importItem(item) }
-            pickerItem = nil
+            Task {
+                await store.importItem(item)
+                pickerItem = nil
+                // 选完直接进编辑器
+                if let newest = store.items.first {
+                    onOpen(newest.payload)
+                }
+            }
         }
     }
 
@@ -221,11 +213,25 @@ struct LibraryScreen: View {
             }
 
             HStack(spacing: 8) {
-                ForEach([Source.local, .photos], id: \.self) { option in
-                    SLChip(title: option.title, isOn: source == option) {
-                        source = option
+                Button {
+                    showImporter = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("从相册选择")
+                            .font(.system(size: 12, weight: .medium))
                     }
+                    .foregroundStyle(Theme.onAccent)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(Theme.accent, in: Capsule())
                 }
+                .buttonStyle(.plain)
+
+                Text("系统相册，可按相簿/文件夹浏览")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.meta)
                 Spacer()
             }
 
@@ -238,7 +244,6 @@ struct LibraryScreen: View {
                 Spacer()
             }
 
-            if source == .local {
             HStack {
                 Text(metaLine)
                     .font(.system(size: 11))
@@ -250,7 +255,6 @@ struct LibraryScreen: View {
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.meta)
                 }
-            }
             }
         }
         .padding(.horizontal, SL.pad)
