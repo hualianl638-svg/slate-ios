@@ -22,6 +22,10 @@ public struct CropMaskSettings: Equatable, Codable, Sendable {
     public var aspectLock: Int = 0
     /// 旋转 90° 次数 0...3。
     public var turns: Int = 0
+    /// 水平镜像（左右翻转）。
+    public var flipHorizontal: Bool = false
+    /// 垂直镜像（上下翻转）。
+    public var flipVertical: Bool = false
     /// 编辑裁剪时临时绕过裁剪，让预览显示完整画面（导出前会复位）。
     public var bypassCrop: Bool = false
 
@@ -40,10 +44,33 @@ public struct CropMaskSettings: Equatable, Codable, Sendable {
 
     public init() {}
 
+    /// 容错解码：后加字段一律给默认值，保证旧存档仍能打开。
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cropX = (try? container.decodeIfPresent(Double.self, forKey: .cropX)) ?? 0
+        cropY = (try? container.decodeIfPresent(Double.self, forKey: .cropY)) ?? 0
+        cropWidth = (try? container.decodeIfPresent(Double.self, forKey: .cropWidth)) ?? 1
+        cropHeight = (try? container.decodeIfPresent(Double.self, forKey: .cropHeight)) ?? 1
+        aspectLock = (try? container.decodeIfPresent(Int.self, forKey: .aspectLock)) ?? 0
+        turns = (try? container.decodeIfPresent(Int.self, forKey: .turns)) ?? 0
+        flipHorizontal = (try? container.decodeIfPresent(Bool.self, forKey: .flipHorizontal)) ?? false
+        flipVertical = (try? container.decodeIfPresent(Bool.self, forKey: .flipVertical)) ?? false
+        bypassCrop = (try? container.decodeIfPresent(Bool.self, forKey: .bypassCrop)) ?? false
+        maskKind = (try? container.decodeIfPresent(Int.self, forKey: .maskKind)) ?? 0
+        centerX = (try? container.decodeIfPresent(Double.self, forKey: .centerX)) ?? 0.5
+        centerY = (try? container.decodeIfPresent(Double.self, forKey: .centerY)) ?? 0.5
+        angle = (try? container.decodeIfPresent(Double.self, forKey: .angle)) ?? 90
+        radius = (try? container.decodeIfPresent(Double.self, forKey: .radius)) ?? 0.55
+        feather = (try? container.decodeIfPresent(Double.self, forKey: .feather)) ?? 0.35
+        strength = (try? container.decodeIfPresent(Double.self, forKey: .strength)) ?? 1
+        invert = (try? container.decodeIfPresent(Bool.self, forKey: .invert)) ?? false
+    }
+
     public var isCropActive: Bool {
         cropWidth < 0.999 || cropHeight < 0.999
             || cropX > 0.001 || cropY > 0.001
             || turns % 4 != 0
+            || flipHorizontal || flipVertical
     }
 
     public var isMaskActive: Bool { maskKind != 0 && strength > 0.001 }
@@ -64,6 +91,19 @@ enum CropMask {
 
     static func crop(_ image: CIImage, settings: CropMaskSettings) -> CIImage {
         var source = image
+
+        // 镜像：先翻转并归位到原点（不改变尺寸），再交给旋转
+        if settings.flipHorizontal || settings.flipVertical {
+            source = source.transformed(by: CGAffineTransform(
+                scaleX: settings.flipHorizontal ? -1 : 1,
+                y: settings.flipVertical ? -1 : 1
+            ))
+            source = source.transformed(by: CGAffineTransform(
+                translationX: -source.extent.origin.x,
+                y: -source.extent.origin.y
+            ))
+        }
+
         let turns = ((settings.turns % 4) + 4) % 4
         if turns != 0 {
             let orientations: [CGImagePropertyOrientation] = [.up, .right, .down, .left]

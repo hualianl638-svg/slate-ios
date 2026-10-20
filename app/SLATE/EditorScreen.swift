@@ -925,6 +925,16 @@ struct EditorScreen: View {
             }
 
             HStack(spacing: 10) {
+                SLTextButton(title: "水平镜像") {
+                    setCrop(\.flipHorizontal, !model.cropMask.flipHorizontal)
+                }
+                SLTextButton(title: "垂直镜像") {
+                    setCrop(\.flipVertical, !model.cropMask.flipVertical)
+                }
+                Spacer()
+            }
+
+            HStack(spacing: 10) {
                 SLTextButton(title: "旋转 90°") {
                     setCrop(\.turns, (model.cropMask.turns + 1) % 4)
                     // 旋转后源图宽高比变倒数，按当前锁定比例重新拟合
