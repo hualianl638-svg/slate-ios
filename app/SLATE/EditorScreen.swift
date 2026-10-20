@@ -25,6 +25,8 @@ struct EditorScreen: View {
     /// 视频文件地址（照片素材为 nil）。显式传入而不是从模型里读，
     /// 因为子视图 onAppear 早于父视图 onAppear，那时模型还没装载。
     var videoURL: URL?
+    /// 该素材的存档键（用于恢复上次调整）。
+    var editKey: String = ""
     var onClose: () -> Void
 
     @State private var tool: Tool = .basic
@@ -32,6 +34,7 @@ struct EditorScreen: View {
     @State private var showFullPreview = false
     @State private var showRestorePicker = false
     @State private var didRestoreStyleLUT = false
+    @State private var didRestoreEdit = false
     @StateObject private var playback = VideoPlayback()
     @State private var didConfigurePlayback = false
     @State private var comparing = false
@@ -95,8 +98,10 @@ struct EditorScreen: View {
             }
         }
         .onAppear {
+            // 顺序很重要：先把上次调整恢复到模型，再配置播放器/同步选区，
+            // 否则播放器与预览会用旧状态渲染。
+            restoreSavedEditIfNeeded()
             configurePlaybackIfNeeded()
-            // 恢复的编辑状态里包含选段与风格 LUT，进入时同步给播放器 / LUT 状态
             syncTrim()
             playback.refresh()
             restoreStyleLUTIfNeeded()
@@ -469,6 +474,18 @@ struct EditorScreen: View {
         playback.applyTrim(start: model.trimStart, end: model.trimEnd)
     }
 
+    /// 把该素材上次保存的调整恢复到模型。
+    ///
+    /// 放在 onAppear 而不是父视图 init：init 时 @StateObject 还没挂载，
+    /// requestRender 触发的 @Published 更新可能被丢弃，导致照片恢复后不重渲染。
+    private func restoreSavedEditIfNeeded() {
+        guard !didRestoreEdit else { return }
+        didRestoreEdit = true
+        guard !editKey.isEmpty,
+              let saved = EditStateStore.shared.restore(for: editKey) else { return }
+        model.restore(saved)
+    }
+
     /// 恢复的编辑状态里若带风格 LUT，重新从 LUT 库解析并套用。
     ///
     /// EditState 只存 LUT 的引用（名称/路径），渲染器需要真实的 LUT3D，
@@ -762,6 +779,15 @@ struct EditorScreen: View {
             Text(model.activeLUTName ?? "未套用 LUT")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(model.activeLUTName == nil ? Theme.meta : Theme.accent)
+
+            // 存档里记着某个风格 LUT，但文件已不在 LUT 库 -> 明确提示，
+            // 避免"名字对但画面没变化"这种静默失败。
+            if let reference = model.state.lut.reference, model.activeLUTName == nil {
+                Text("上次套用的 LUT「\(reference.displayName)」未找到，请重新导入或选择其他 LUT")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
