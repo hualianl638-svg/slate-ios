@@ -69,19 +69,6 @@ struct EditorScreen: View {
         // 这里按实际 inset 补顶部留白，横竖屏都成立。
         GeometryReader { proxy in
 
-            // 裁剪：画面内拖手柄。
-            // 降低 z 序，避免盖住右下角的「放大 / 对比」按钮导致点不动。
-            if tool == .crop {
-                GeometryReader { _ in
-                    CropOverlay(
-                        settings: cropMaskBinding,
-                        sourceAspect: effectiveSourceAspect
-                    ) {
-                        playback.refresh()
-                    }
-                }
-            }
-
             VStack(spacing: 0) {
                 nav
                     // 系统已给安全区时 proxy 有值（不再补）；
@@ -207,6 +194,20 @@ struct EditorScreen: View {
                     .scaledToFit()
             } else {
                 ProgressView().tint(Theme.muted)
+            }
+
+
+            // 裁剪：画面内拖手柄。
+            // 降低 z 序，避免盖住右下角的「放大 / 对比」按钮导致点不动。
+            if tool == .crop {
+                GeometryReader { _ in
+                    CropOverlay(
+                        settings: cropMaskBinding,
+                        sourceAspect: effectiveSourceAspect
+                    ) {
+                        playback.refresh()
+                    }
+                }
             }
 
             // 叠加控件分两排：上排左角标/胶囊、右直方图；下排右放大/对比。
@@ -1049,6 +1050,9 @@ struct EditorScreen: View {
                 var settings = model.cropMask
                 settings.bypassCrop = false
                 model.cropMask = settings
+                // 先退出裁剪工具：否则 tool 仍为 .crop 而 bypass 被置 false，
+                // 预览已是裁剪后画面、叠加层却按整幅映射（永久错位）
+                tool = .basic
                 // 4) 点导出即保存：避免导出后 App 被杀导致调整丢失
                 EditStateStore.shared.save(model.state, for: editKey)
                 showExport = true

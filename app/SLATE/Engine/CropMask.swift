@@ -80,7 +80,11 @@ enum CropMask {
             y: extent.minY + extent.height * CGFloat(min(max(settings.cropY, 0), 1)),
             width: extent.width * CGFloat(min(max(settings.cropWidth, 0.02), 1)),
             height: extent.height * CGFloat(min(max(settings.cropHeight, 0.02), 1))
-        ).integral.intersection(extent)
+        )
+        // 注意：不要再用 .integral 做像素扩边。
+        // 扩边会让实际裁剪宽高比与用户看到/设定的框产生 1~2px 偏差，
+        // 在 1:1 等锁定比例下表现为看起来不是正方形。
+        .intersection(extent)
 
         guard rect.width > 1, rect.height > 1 else { return source }
 

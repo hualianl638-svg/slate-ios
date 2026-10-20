@@ -18,7 +18,7 @@ struct CropOverlay: View {
 
     @State private var startRect: CGRect?
 
-    private let handle: CGFloat = 22
+    private let handle: CGFloat = 28
 
     var body: some View {
         GeometryReader { geo in
@@ -76,7 +76,7 @@ struct CropOverlay: View {
     private func corner(_ corner: Corner, at point: CGPoint, size: CGSize) -> some View {
         Circle()
             .fill(.white)
-            .frame(width: handle * 0.7, height: handle * 0.7)
+            .frame(width: handle * 0.75, height: handle * 0.75)
             .overlay(Circle().strokeBorder(.black.opacity(0.35), lineWidth: 1))
             .frame(width: handle, height: handle)
             .contentShape(Rectangle())
