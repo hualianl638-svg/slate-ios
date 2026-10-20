@@ -79,7 +79,7 @@ final class LibraryStore: ObservableObject {
                     subtitle: subtitleParts.joined(separator: " · "),
                     isLogLikely: false,
                     detectionNote: note,
-                    editKey: movie.url.lastPathComponent
+                    editKey: "video-\(picker.itemIdentifier ?? movie.url.lastPathComponent)"
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
             } else {
@@ -93,7 +93,7 @@ final class LibraryStore: ObservableObject {
                     videoURL: nil,
                     title: "照片",
                     subtitle: "\(Int(image.size.width)) × \(Int(image.size.height))",
-                    editKey: Self.photoKey(for: data)
+                    editKey: "photo-\(picker.itemIdentifier ?? Self.photoKey(for: data))"
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
             }
@@ -202,12 +202,14 @@ struct LibraryScreen: View {
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }
             Task {
+                let countBefore = store.items.count
                 await store.importItem(item)
                 pickerItem = nil
-                // 选完直接进编辑器
-                if let newest = store.items.first {
-                    onOpen(newest.payload)
-                }
+                // 导入失败时不要 fall through 去打开上一条素材
+                guard store.errorText == nil,
+                      store.items.count > countBefore,
+                      let newest = store.items.first else { return }
+                onOpen(newest.payload)
             }
         }
     }

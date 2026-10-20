@@ -220,6 +220,8 @@ struct EditorScreen: View {
                     zoomButton
                     compareButton
                 }
+                // 抬高控件层，保证裁剪手柄层不会盖住这两个按钮
+                .zIndex(2)
             }
             .padding(10)
 
@@ -234,7 +236,6 @@ struct EditorScreen: View {
                         playback.refresh()
                     }
                 }
-                .zIndex(-1)
             }
 
             if model.isRendering {
@@ -283,9 +284,9 @@ struct EditorScreen: View {
         } label: {
             HStack(spacing: 5) {
                 Circle()
-                    .fill(model.logProfile == .off ? Theme.meta : Theme.accent)
+                    .fill(!showsRestoreCurve ? Theme.meta : Theme.accent)
                     .frame(width: 5, height: 5)
-                Text(model.logProfile == .off ? "709 预览" : model.logProfile.title)
+                Text(showsRestoreCurve ? model.logProfile.title : "709 预览")
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(Theme.text)
             }
@@ -466,7 +467,11 @@ struct EditorScreen: View {
             .gesture(
                 DragGesture(minimumDistance: 0, coordinateSpace: .named("timeline"))
                     .onChanged { value in
-                        let fraction = Double(min(max(0, value.location.x), width) / width)
+                        // 手柄宽 14pt：按手指位置换算时扣掉抓握偏移，
+                        // 否则按下瞬间边界会跳 7~14pt（短片约 2% 片长）
+                        let raw = Double(min(max(0, value.location.x), width) / width)
+                        let grip = 7.0 / Double(max(width, 1))
+                        let fraction = isStart ? max(0, raw + grip) : min(1, raw - grip)
                         if isStart {
                             model.setTrim(start: fraction, end: model.trimEnd)
                         } else {
@@ -634,6 +639,11 @@ struct EditorScreen: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.line).frame(height: 0.5)
         }
+    }
+
+    /// 还原曲线是否真正生效（开关打开且选了曲线）。
+    private var showsRestoreCurve: Bool {
+        model.restoreEnabled && model.logProfile != .off
     }
 
     /// 左上角标：只有**开关打开**时才显示曲线名，否则显示默认态。

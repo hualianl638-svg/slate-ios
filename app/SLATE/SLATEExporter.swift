@@ -137,13 +137,21 @@ final class SLATEExporter {
             throw ExportError.writerFailed("素材尺寸异常（\(outWidth)×\(outHeight)）")
         }
 
-        // 画布必须按**裁剪后**的尺寸算。
-        // 之前用源尺寸当画布，而逐帧渲染出来的是裁剪后的图，
-        // render(into:) 会把裁剪结果用 sx≠sy 非等比拉伸回满画布 —— 成片画面变形。
+        // 画布必须按**裁剪后**的尺寸算，且要折入 90°/270° 旋转：
+        // 之前要么用源尺寸（非等比拉伸），要么漏了 turns（横竖颠倒）。
         let exportCrop = state.cropMask
         if !exportCrop.bypassCrop, exportCrop.isCropActive {
-            outWidth = max(2, Int(Double(outWidth) * exportCrop.cropWidth))
-            outHeight = max(2, Int(Double(outHeight) * exportCrop.cropHeight))
+            // 旋转奇数次 -> 基准宽高互换（与 CropMask.crop 的 turns 处理一致）
+            let swap = exportCrop.turns % 2 != 0
+            let baseW = swap ? outHeight : outWidth
+            let baseH = swap ? outWidth : outHeight
+            let cw = min(max(exportCrop.cropWidth, 0.02), 1)
+            let ch = min(max(exportCrop.cropHeight, 0.02), 1)
+            // 单一比例推出两维，避免 sx/sy 各自四舍五入产生 0.2% 的非等比残差
+            let targetW = Double(baseW) * cw
+            let targetH = targetW * (ch * Double(baseH)) / (cw * Double(max(baseW, 1)))
+            outWidth = Int(targetW.rounded())
+            outHeight = Int(targetH.rounded())
         }
         if outWidth % 2 != 0 { outWidth -= 1 }
         if outHeight % 2 != 0 { outHeight -= 1 }
@@ -414,6 +422,12 @@ final class SLATEExporter {
                     let outputPTS = CMTimeSubtract(pts, ptsOrigin)
                     if CMTimeCompare(outputPTS, .zero) < 0 {
                         continue
+                    }
+                    if writer.status == .failed {
+                        finishWithError(ExportError.writerFailed(
+                            writer.error?.localizedDescription ?? "写入器异常"
+                        ))
+                        return
                     }
                     if !adaptor.append(outBuffer, withPresentationTime: outputPTS) {
                         finishWithError(ExportError.writerFailed(
