@@ -217,6 +217,25 @@ final class EditorModel: ObservableObject {
         }
     }
 
+    // MARK: 选段裁剪
+
+    var trimStart: Double {
+        get { state.trimStart }
+        set { state.trimStart = min(newValue, state.trimEnd - 0.02) }
+    }
+
+    var trimEnd: Double {
+        get { state.trimEnd }
+        set { state.trimEnd = max(newValue, state.trimStart + 0.02) }
+    }
+
+    func setTrim(start: Double, end: Double) {
+        let s = max(0, min(start, 0.98))
+        let e = min(1, max(end, s + 0.02))
+        state.trimStart = s
+        state.trimEnd = e
+    }
+
     @Published var hslSelectedBand: HSLBandID = .red
 
     /// 选中通道的色相偏移（-1...1，满量程 ±30°）。

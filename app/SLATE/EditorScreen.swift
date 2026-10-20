@@ -319,7 +319,7 @@ struct EditorScreen: View {
     // MARK: 时间轴
 
     private var timeline: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             HStack(spacing: 10) {
                 Button {
                     playback.togglePlay()
@@ -350,19 +350,21 @@ struct EditorScreen: View {
                 }
                 .buttonStyle(.plain)
 
-                Text(durationText)
+                Text(trimSummary)
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.meta)
                     .lineLimit(1)
             }
 
             GeometryReader { geo in
-                let width = geo.size.width
+                let width = max(geo.size.width, 1)
+                let startX = width * CGFloat(model.trimStart)
+                let endX = width * CGFloat(model.trimEnd)
+
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(Theme.surface2)
 
-                    // 胶片条示意
                     HStack(spacing: 2) {
                         ForEach(0..<10, id: \.self) { _ in
                             Rectangle().fill(Theme.line.opacity(0.5))
@@ -370,22 +372,35 @@ struct EditorScreen: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
-                    // 已播放进度
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    // 选区外压暗
+                    Rectangle().fill(.black.opacity(0.45)).frame(width: max(0, startX))
+                    Rectangle().fill(.black.opacity(0.45))
+                        .frame(width: max(0, width - endX))
+                        .offset(x: endX)
+
+                    // 已播放进度（仅选段内）
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
                         .fill(Theme.accent.opacity(0.28))
-                        .frame(width: max(0, width * playback.progress))
+                        .frame(width: max(0, min(width * CGFloat(playback.progress), endX) - startX))
+                        .offset(x: startX)
+
+                    // 选段边框
+                    Rectangle().fill(Theme.accent.opacity(0.9))
+                        .frame(width: 2)
+                        .offset(x: max(0, startX))
+                    Rectangle().fill(Theme.accent.opacity(0.9))
+                        .frame(width: 2)
+                        .offset(x: min(width - 2, endX - 2))
 
                     // 播放头
                     Rectangle()
-                        .fill(Theme.accent)
-                        .frame(width: 2)
-                        .overlay(alignment: .top) {
-                            Circle()
-                                .fill(Theme.accent)
-                                .frame(width: 7, height: 7)
-                                .offset(y: -3)
-                        }
-                        .offset(x: max(0, min(width - 2, width * playback.progress)))
+                        .fill(Theme.text)
+                        .frame(width: 1.5)
+                        .offset(x: max(0, min(width - 1.5, width * CGFloat(playback.progress))))
+
+                    // 左右裁剪手柄
+                    trimHandle(isStart: true, at: startX, width: width)
+                    trimHandle(isStart: false, at: endX - 14, width: width)
                 }
                 .frame(height: geo.size.height)
                 .contentShape(Rectangle())
@@ -393,12 +408,14 @@ struct EditorScreen: View {
                     DragGesture(minimumDistance: 0)
                         .onChanged { drag in
                             guard playback.duration > 0 else { return }
-                            let ratio = min(1, max(0, drag.location.x / max(width, 1)))
-                            playback.seek(to: ratio * playback.duration)
+                            let ratio = Double(min(1, max(0, drag.location.x / width)))
+                            // seek 也限制在选段内
+                            let clamped = min(max(ratio, model.trimStart), model.trimEnd)
+                            playback.seek(to: clamped * playback.duration)
                         }
                 )
             }
-            .frame(height: 34)
+            .frame(height: 44)
         }
         .padding(.horizontal, SL.pad)
         .padding(.vertical, 8)
@@ -406,6 +423,53 @@ struct EditorScreen: View {
         .overlay(alignment: .top) {
             Rectangle().fill(Theme.line).frame(height: 0.5)
         }
+        .onChange(of: model.trimStart) { _, _ in syncTrim() }
+        .onChange(of: model.trimEnd) { _, _ in syncTrim() }
+    }
+
+    private func trimHandle(isStart: Bool, at x: CGFloat, width: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(Theme.accent)
+            .frame(width: 14, height: 44)
+            .overlay {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Theme.onAccent)
+            }
+            .offset(x: max(0, min(width - 14, x)))
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let fraction = Double(min(max(0, value.location.x), width) / width)
+                        if isStart {
+                            model.setTrim(start: fraction, end: model.trimEnd)
+                        } else {
+                            model.setTrim(start: model.trimStart, end: fraction)
+                        }
+                        syncTrim()
+                    }
+            )
+    }
+
+    private func syncTrim() {
+        playback.applyTrim(start: model.trimStart, end: model.trimEnd)
+    }
+
+    /// 选段摘要：起止时间 + 时长。
+    private var trimSummary: String {
+        guard playback.duration > 0 else { return "" }
+        let total = playback.duration
+        let startSeconds = total * model.trimStart
+        let lengthSeconds = total * (model.trimEnd - model.trimStart)
+        return String(format: "%@ → %@ · %@",
+                      timeString(startSeconds),
+                      timeString(startSeconds + lengthSeconds),
+                      timeString(lengthSeconds))
+    }
+
+    private func timeString(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
     private var durationText: String {
@@ -758,6 +822,12 @@ struct EditorScreen: View {
                     }
                 }
                 Spacer(minLength: 0)
+            }
+
+            SLPrimaryButton(title: "确定裁剪") {
+                // 退出裁剪工具会触发 bypassCrop = false，裁剪正式生效
+                tool = .basic
+                playback.refresh()
             }
 
             HStack(spacing: 10) {

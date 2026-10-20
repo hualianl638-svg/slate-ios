@@ -9,6 +9,7 @@
 //  避免看起来能选却导不出对应格式。
 //
 
+import AVFoundation
 import SwiftUI
 
 struct SLExportSheet: View {
@@ -360,8 +361,22 @@ struct SLExportSheet: View {
 
             case .video:
                 guard let url = model.sourceVideoURL else { throw ExportError.noVideoTrack }
+                // 选段裁剪：按 trim 区间导出
+                var range: CMTimeRange?
+                if model.trimStart > 0.001 || model.trimEnd < 0.999 {
+                    if let duration = try? await AVURLAsset(url: url).load(.duration) {
+                        let total = CMTimeGetSeconds(duration)
+                        let startSeconds = total * model.trimStart
+                        let lengthSeconds = total * (model.trimEnd - model.trimStart)
+                        range = CMTimeRange(
+                            start: CMTime(seconds: startSeconds, preferredTimescale: 600),
+                            duration: CMTime(seconds: max(0.1, lengthSeconds), preferredTimescale: 600)
+                        )
+                    }
+                }
                 let output = try await SLATEExporter.shared.exportVideo(
-                    sourceURL: url, state: model.state, lut: model.currentLUT, settings: settings
+                    sourceURL: url, state: model.state, lut: model.currentLUT,
+                    settings: settings, timeRange: range
                 ) { value in
                     progress = value
                 }

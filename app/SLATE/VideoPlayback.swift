@@ -27,6 +27,14 @@ final class VideoPlayback: ObservableObject {
     @Published private(set) var isMuted = false
     /// 跳过调色（长按「对比」时显示原片）。
     var bypassGrading = false
+    /// 选段裁剪区间（0...1），播放到终点自动回到起点。
+    private var trimStartFraction: Double = 0
+    private var trimEndFraction: Double = 1
+
+    func applyTrim(start: Double, end: Double) {
+        trimStartFraction = min(max(start, 0), 1)
+        trimEndFraction = min(max(end, trimStartFraction + 0.02), 1)
+    }
 
     private var player: AVPlayer?
     private var item: AVPlayerItem?
@@ -79,7 +87,18 @@ final class VideoPlayback: ObservableObject {
             queue: .main
         ) { [weak self] time in
             guard let self else { return }
-            self.currentTime = CMTimeGetSeconds(time)
+            let seconds = CMTimeGetSeconds(time)
+            self.currentTime = seconds
+
+            // 播放到选段终点 -> 回到起点继续（循环预览）
+            if self.isPlaying, self.duration > 0 {
+                let endTime = self.duration * self.trimEndFraction
+                if seconds >= endTime - 0.03 {
+                    let startTime = self.duration * self.trimStartFraction
+                    self.player?.seek(to: CMTime(seconds: startTime, preferredTimescale: 600))
+                    self.currentTime = startTime
+                }
+            }
         }
 
         renderCurrentFrame(force: true)
@@ -110,6 +129,15 @@ final class VideoPlayback: ObservableObject {
 
     func play() {
         guard let player else { return }
+        // 播放范围限制在选段内；落点在选段外则从起点开始
+        if duration > 0 {
+            let startTime = duration * trimStartFraction
+            let endTime = duration * trimEndFraction
+            if currentTime < startTime - 0.05 || currentTime >= endTime - 0.05 {
+                player.seek(to: CMTime(seconds: startTime, preferredTimescale: 600))
+                currentTime = startTime
+            }
+        }
         // 播到末尾再按播放，从头开始
         if duration > 0, currentTime >= duration - 0.05 {
             player.seek(to: .zero)

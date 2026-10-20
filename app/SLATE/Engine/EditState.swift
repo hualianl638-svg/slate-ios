@@ -91,6 +91,10 @@ public struct EditState: Identifiable, Equatable, Codable, Sendable {
     /// 自定义还原 LUT 的名称（Documents/RestoreLUTs/ 下的文件名，不含扩展名）。
     public var restoreLUTName: String = ""
 
+    /// 视频选段裁剪（0...1 的比例区间）。0 / 1 表示完整素材。
+    public var trimStart: Double = 0
+    public var trimEnd: Double = 1
+
     /// 当前序列化版本。新增字段时递增，供迁移使用。
     public static let currentSchemaVersion = 1
 
