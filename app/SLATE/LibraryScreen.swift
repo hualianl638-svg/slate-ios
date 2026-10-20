@@ -55,7 +55,6 @@ final class LibraryStore: ObservableObject {
                 }
                 let poster = try await Self.poster(for: movie.url)
                 let info = try? await VideoProbe.inspect(url: movie.url)
-                let detection = await VideoProbe.detectLogProfile(url: movie.url)
 
                 var subtitleParts: [String] = []
                 if let info {
@@ -67,11 +66,7 @@ final class LibraryStore: ObservableObject {
                     subtitleParts.append(Self.shortSize(of: movie.url))
                 }
 
-                var note: String?
-                if let detection {
-                    let percent = Int((detection.confidence * 100).rounded())
-                    note = "\(detection.hint) · \(detection.isLikelyLog ? "灰片" : "709")（置信 \(percent)%）"
-                }
+                let note: String? = nil
 
                 let payload = LibraryPayload(
                     image: poster,
@@ -79,7 +74,7 @@ final class LibraryStore: ObservableObject {
                     videoURL: movie.url,
                     title: movie.url.deletingPathExtension().lastPathComponent,
                     subtitle: subtitleParts.joined(separator: " · "),
-                    isLogLikely: detection?.isLikelyLog ?? false,
+                    isLogLikely: false,
                     detectionNote: note
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
@@ -164,6 +159,14 @@ struct LibraryScreen: View {
 
     @State private var pickerItem: PhotosPickerItem?
     @State private var filter: Filter = .all
+    @StateObject private var browser = PhotoLibraryBrowser()
+
+    /// 素材来源：本机导入 / iOS 照片图库。
+    enum Source: Hashable {
+        case local, photos
+        var title: String { self == .local ? "本机" : "照片图库" }
+    }
+    @State private var source: Source = .local
     @State private var showImporter = false
 
     enum Filter: Hashable {
@@ -186,7 +189,13 @@ struct LibraryScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            scroll
+            if source == .photos {
+                PhotosBrowserView(browser: browser) { payload in
+                    onOpen(payload)
+                }
+            } else {
+                scroll
+            }
         }
         .photosPicker(isPresented: $showImporter, selection: $pickerItem, matching: .any(of: [.images, .videos]))
         .onChange(of: pickerItem) { _, item in
@@ -212,6 +221,15 @@ struct LibraryScreen: View {
             }
 
             HStack(spacing: 8) {
+                ForEach([Source.local, .photos], id: \.self) { option in
+                    SLChip(title: option.title, isOn: source == option) {
+                        source = option
+                    }
+                }
+                Spacer()
+            }
+
+            HStack(spacing: 8) {
                 ForEach([Filter.all, .photo, .video], id: \.self) { option in
                     SLChip(title: option.title, isOn: filter == option) {
                         filter = option
@@ -220,6 +238,7 @@ struct LibraryScreen: View {
                 Spacer()
             }
 
+            if source == .local {
             HStack {
                 Text(metaLine)
                     .font(.system(size: 11))
@@ -231,6 +250,7 @@ struct LibraryScreen: View {
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.meta)
                 }
+            }
             }
         }
         .padding(.horizontal, SL.pad)
@@ -300,7 +320,7 @@ struct LibraryScreen: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(alignment: .topLeading) {
-                    Text(item.isVideo ? (item.payload.isLogLikely ? "LOG" : "709") : "照片")
+                    Text(item.isVideo ? "视频" : "照片")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(Theme.text)
                         .padding(.horizontal, 5)
