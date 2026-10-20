@@ -4,6 +4,13 @@
 //
 //  直接浏览 iOS「照片」图库：按相册（文件夹）筛选，点击素材直接进编辑器。
 //
+//  性能约定（M31 卡顿的修复）：
+//   · 所有 PHFetch / 枚举都放到后台，绝不阻塞主线程；
+//   · 单个相册最多取最近 `pageLimit` 项，避免上万张素材一次性枚举；
+//   · 网格缩略图**只取本地缓存**（isNetworkAccessAllowed = false），
+//     iCloud 素材需要下载时才在点开时按需下载；
+//   · 缩略图未就绪时显示占位块，不再每个格子挂一个转圈。
+//
 
 import AVFoundation
 import Photos
@@ -25,10 +32,21 @@ final class PhotoLibraryBrowser: ObservableObject {
     @Published private(set) var assets: [PHAsset] = []
     @Published private(set) var authorized = false
     @Published private(set) var denied = false
+    @Published private(set) var isLoading = false
     @Published var selectedAlbumID: String = "all"
+
+    /// 单个相册最多展示的数量。
+    static let pageLimit = 400
 
     private var thumbnails: [String: UIImage] = [:]
     private let imageManager = PHImageManager.default()
+
+    // MARK: 权限与加载
+
+    func prepareIfNeeded() async {
+        guard !authorized, !denied else { return }
+        await requestAccess()
+    }
 
     func requestAccess() async {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -43,17 +61,52 @@ final class PhotoLibraryBrowser: ObservableObject {
         switch resolved {
         case .authorized, .limited:
             authorized = true
-            loadAlbums()
-            selectAlbum(id: "all")
+            await refresh()
         default:
             denied = true
         }
     }
 
-    func loadAlbums() {
+    /// 拉相册列表 + 「全部」的首屏素材（全部在后台执行）。
+    func refresh() async {
+        isLoading = true
+        let albums = await Task.detached(priority: .userInitiated) {
+            Self.fetchAlbums()
+        }.value
+        self.albums = albums
+
+        let list = await Task.detached(priority: .userInitiated) {
+            Self.fetchAssets(collectionID: nil, limit: Self.pageLimit)
+        }.value
+        self.assets = list
+        self.selectedAlbumID = "all"
+        self.thumbnails.removeAll()
+        isLoading = false
+    }
+
+    func selectAlbum(id: String) {
+        selectedAlbumID = id
+        isLoading = true
+        // 先清空，避免继续显示上一个相册的缩略图
+        assets = []
+        thumbnails.removeAll()
+
+        Task {
+            let list = await Task.detached(priority: .userInitiated) {
+                Self.fetchAssets(collectionID: id, limit: Self.pageLimit)
+            }.value
+            if self.selectedAlbumID == id {
+                self.assets = list
+                self.isLoading = false
+            }
+        }
+    }
+
+    // MARK: 后台抓取
+
+    private nonisolated static func fetchAlbums() -> [Album] {
         var result: [Album] = [Album(id: "all", title: "全部", collection: nil)]
 
-        // 智能相册（最近项目 / 视频 / 自拍…）
         let smartTypes: [PHAssetCollectionSubtype] = [
             .smartAlbumUserLibrary,
             .smartAlbumVideos,
@@ -69,51 +122,60 @@ final class PhotoLibraryBrowser: ObservableObject {
             }
         }
 
-        // 用户自建相册 / 文件夹（"按文件夹选择"）
+        // 用户自建相册（文件夹）
         let userAlbums = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: nil)
         userAlbums.enumerateObjects { collection, _, _ in
             guard let title = collection.localizedTitle else { return }
+            if result.contains(where: { $0.title == title }) { return }
             result.append(Album(id: collection.localIdentifier, title: title, collection: collection))
         }
 
-        albums = result
+        return result
     }
 
-    func selectAlbum(id: String) {
-        selectedAlbumID = id
-        guard let album = albums.first(where: { $0.id == id }) else { return }
-
+    private nonisolated static func fetchAssets(collectionID: String?, limit: Int) -> [PHAsset] {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        options.predicate = NSPredicate(format: "mediaType == %d OR mediaType == %d",
-                                       PHAssetMediaType.image.rawValue,
-                                       PHAssetMediaType.video.rawValue)
+        options.fetchLimit = limit
+        options.predicate = NSPredicate(
+            format: "mediaType == %d OR mediaType == %d",
+            PHAssetMediaType.image.rawValue,
+            PHAssetMediaType.video.rawValue
+        )
 
         let fetched: PHFetchResult<PHAsset>
-        if let collection = album.collection {
+        if let collectionID,
+           let collection = PHAssetCollection.fetchAssetCollections(
+               withLocalIdentifiers: [collectionID], options: nil
+           ).firstObject {
             fetched = PHAsset.fetchAssets(in: collection, options: options)
         } else {
             fetched = PHAsset.fetchAssets(with: options)
         }
 
         var list: [PHAsset] = []
-        list.reserveCapacity(fetched.count)
-        fetched.enumerateObjects { asset, _, _ in list.append(asset) }
-        assets = list
-        thumbnails.removeAll()
+        list.reserveCapacity(min(fetched.count, limit))
+        fetched.enumerateObjects { asset, index, stop in
+            list.append(asset)
+            if index >= limit - 1 { stop.pointee = true }
+        }
+        return list
     }
+
+    // MARK: 缩略图
 
     func thumbnail(for asset: PHAsset) -> UIImage? {
         thumbnails[asset.localIdentifier]
     }
 
-    /// 拉取缩略图（网格用）。
+    /// 网格缩略图：只读本地（iCloud 未下载的素材不要在这里等）。
     func loadThumbnail(for asset: PHAsset, size: CGSize = CGSize(width: 220, height: 220)) {
         guard thumbnails[asset.localIdentifier] == nil else { return }
         let options = PHImageRequestOptions()
         options.deliveryMode = .fastFormat
         options.resizeMode = .fast
-        options.isNetworkAccessAllowed = true
+        options.isNetworkAccessAllowed = false
+        options.isSynchronous = false
         imageManager.requestImage(for: asset, targetSize: size, contentMode: .aspectFill, options: options) { [weak self] image, _ in
             guard let image else { return }
             Task { @MainActor in
@@ -122,11 +184,11 @@ final class PhotoLibraryBrowser: ObservableObject {
         }
     }
 
-    /// 把 PHAsset 转换为编辑器可用的素材。
+    // MARK: 素材 → 编辑器载荷
+
     func payload(for asset: PHAsset) async -> LibraryPayload? {
         if asset.mediaType == .video {
-            guard let avAsset = await requestAVAsset(for: asset),
-                  let urlAsset = avAsset as? AVURLAsset else { return nil }
+            guard let urlAsset = await requestAVAsset(for: asset) as? AVURLAsset else { return nil }
             let poster = await requestFullImage(for: asset, isVideo: true) ?? UIImage()
             let info = try? await VideoProbe.inspect(url: urlAsset.url)
             var parts: [String] = []
@@ -163,9 +225,9 @@ final class PhotoLibraryBrowser: ObservableObject {
         await withCheckedContinuation { (continuation: CheckedContinuation<UIImage?, Never>) in
             let options = PHImageRequestOptions()
             options.deliveryMode = .highQualityFormat
+            // 点开时才允许从 iCloud 下载
             options.isNetworkAccessAllowed = true
             options.resizeMode = .exact
-            // 视频取一帧做封面，尺寸不必最大
             let target = isVideo ? CGSize(width: 1600, height: 1600) : PHImageManagerMaximumSize
             imageManager.requestImage(for: asset, targetSize: target, contentMode: .aspectFit, options: options) { image, _ in
                 continuation.resume(returning: image)
@@ -229,46 +291,68 @@ struct PhotosBrowserView: View {
             }
         }
         .task {
-            await browser.requestAccess()
+            await browser.prepareIfNeeded()
         }
     }
 
     private var content: some View {
         VStack(spacing: 0) {
-            // 相册（文件夹）选择
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(browser.albums) { album in
-                        SLChip(title: album.title,
-                               isOn: browser.selectedAlbumID == album.id,
-                               compact: true) {
-                            browser.selectAlbum(id: album.id)
-                        }
+            albumBar
+            if browser.isLoading {
+                ProgressView()
+                    .tint(Theme.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
+                Spacer(minLength: 0)
+            } else if browser.assets.isEmpty {
+                SLEmptyState(
+                    icon: "photo.stack",
+                    title: "这个相册是空的",
+                    message: "换一个相册试试。"
+                )
+                .padding(.top, 40)
+                Spacer(minLength: 0)
+            } else {
+                grid
+            }
+        }
+    }
+
+    private var albumBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(browser.albums) { album in
+                    SLChip(title: album.title,
+                           isOn: browser.selectedAlbumID == album.id,
+                           compact: true) {
+                        browser.selectAlbum(id: album.id)
                     }
                 }
-                .padding(.horizontal, SL.pad)
-                .padding(.vertical, 8)
+            }
+            .padding(.horizontal, SL.pad)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var grid: some View {
+        ScrollView {
+            if browser.assets.count >= PhotoLibraryBrowser.pageLimit {
+                Text("仅显示最近 \(PhotoLibraryBrowser.pageLimit) 项")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.meta)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, SL.pad)
+                    .padding(.bottom, 4)
             }
 
-            ScrollView {
-                if browser.assets.isEmpty {
-                    SLEmptyState(
-                        icon: "photo.stack",
-                        title: "这个相册是空的",
-                        message: "换一个相册试试。"
-                    )
-                    .padding(.top, 50)
-                } else {
-                    LazyVGrid(columns: columns, spacing: 4) {
-                        ForEach(browser.assets, id: \.localIdentifier) { asset in
-                            cell(asset)
-                                .onAppear { browser.loadThumbnail(for: asset) }
-                        }
-                    }
-                    .padding(.horizontal, 4)
-                    .padding(.bottom, 24)
+            LazyVGrid(columns: columns, spacing: 4) {
+                ForEach(browser.assets, id: \.localIdentifier) { asset in
+                    cell(asset)
+                        .onAppear { browser.loadThumbnail(for: asset) }
                 }
             }
+            .padding(.horizontal, 4)
+            .padding(.bottom, 24)
         }
     }
 
@@ -292,8 +376,6 @@ struct PhotosBrowserView: View {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
-                } else {
-                    ProgressView().tint(Theme.meta).scaleEffect(0.7)
                 }
 
                 if loadingID == asset.localIdentifier {
