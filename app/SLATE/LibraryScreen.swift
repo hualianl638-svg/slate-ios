@@ -198,6 +198,14 @@ struct LibraryScreen: View {
             header
             scroll
         }
+        .alert("导入失败", isPresented: Binding(
+            get: { store.errorText != nil },
+            set: { if !\ { store.errorText = nil } }
+        )) {
+            Button("好", role: .cancel) { store.errorText = nil }
+        } message: {
+            Text(store.errorText ?? "")
+        }
         .photosPicker(isPresented: $showImporter, selection: $pickerItem, matching: .any(of: [.images, .videos]))
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }

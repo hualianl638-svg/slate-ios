@@ -202,7 +202,7 @@ struct SLExportSheet: View {
             }
 
 
-            Text("片段取自视频的「选段裁剪」：在选段内居中截取，静帧为片段中间帧。（配对视频为 H.264）")
+            Text("片段取自视频的「选段裁剪」：在选段内居中截取，静帧为片段中间帧。若选段短于所选时长，会自动按选段长度截取（最少 2 秒）。（配对视频为 H.264）")
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.meta)
                 .fixedSize(horizontal: false, vertical: true)
