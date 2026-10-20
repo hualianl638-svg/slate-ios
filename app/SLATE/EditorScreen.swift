@@ -68,6 +68,20 @@ struct EditorScreen: View {
         // fullScreenCover 下若上层没有传递安全区，导航栏会直接贴到状态栏上。
         // 这里按实际 inset 补顶部留白，横竖屏都成立。
         GeometryReader { proxy in
+
+            // 裁剪：画面内拖手柄。
+            // 降低 z 序，避免盖住右下角的「放大 / 对比」按钮导致点不动。
+            if tool == .crop {
+                GeometryReader { _ in
+                    CropOverlay(
+                        settings: cropMaskBinding,
+                        sourceAspect: effectiveSourceAspect
+                    ) {
+                        playback.refresh()
+                    }
+                }
+            }
+
             VStack(spacing: 0) {
                 nav
                     // 系统已给安全区时 proxy 有值（不再补）；
@@ -221,22 +235,8 @@ struct EditorScreen: View {
                     compareButton
                 }
                 // 抬高控件层，保证裁剪手柄层不会盖住这两个按钮
-                .zIndex(2)
             }
             .padding(10)
-
-            // 裁剪：画面内拖手柄。
-            // 降低 z 序，避免盖住右下角的「放大 / 对比」按钮导致点不动。
-            if tool == .crop {
-                GeometryReader { _ in
-                    CropOverlay(
-                        settings: cropMaskBinding,
-                        sourceAspect: effectiveSourceAspect
-                    ) {
-                        playback.refresh()
-                    }
-                }
-            }
 
             if model.isRendering {
                 ProgressView()
@@ -279,7 +279,8 @@ struct EditorScreen: View {
     /// 灰片还原开关：点一下在「S-Log3 还原」与「709 直通」之间切换。
     private var pillToggle: some View {
         Button {
-            model.logProfile = (model.logProfile == .off) ? .sLog3 : .off
+            // 只开关还原，不改用户选的曲线
+            model.restoreEnabled.toggle()
             playback.refresh()
         } label: {
             HStack(spacing: 5) {
@@ -471,7 +472,9 @@ struct EditorScreen: View {
                         // 否则按下瞬间边界会跳 7~14pt（短片约 2% 片长）
                         let raw = Double(min(max(0, value.location.x), width) / width)
                         let grip = 7.0 / Double(max(width, 1))
-                        let fraction = isStart ? max(0, raw + grip) : min(1, raw - grip)
+                        // start 手柄画在 startX（中心在边界右侧 7pt）→ 减；
+                        // end 手柄画在 endX-14（中心在边界左侧 7pt）→ 加。
+                        let fraction = isStart ? max(0, raw - grip) : min(1, raw + grip)
                         if isStart {
                             model.setTrim(start: fraction, end: model.trimEnd)
                         } else {

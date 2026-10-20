@@ -93,7 +93,7 @@ final class LibraryStore: ObservableObject {
                     videoURL: nil,
                     title: "照片",
                     subtitle: "\(Int(image.size.width)) × \(Int(image.size.height))",
-                    editKey: "photo-\(picker.itemIdentifier ?? Self.photoKey(for: data))"
+                    editKey: picker.itemIdentifier.map { "photo-" + $0 } ?? Self.photoKey(for: data)
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
             }

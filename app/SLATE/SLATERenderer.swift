@@ -462,18 +462,24 @@ final class SLATERenderer {
                 translationX: -origin.x, y: -origin.y
             ))
         }
-        // 尺寸对齐（正常情况下已一致；这里兜底防止 append 尺寸不匹配）
+        // 尺寸对齐：**统一缩放 + 居中 + 黑底**。
+        // 之前用 sx/sy 各自缩放，两维取整不同就会产生非等比拉伸（成片变形）。
         let extent = current.extent
-        if extent.width > 0, extent.height > 0,
-           abs(extent.width - size.width) > 1 || abs(extent.height - size.height) > 1 {
-            let sx = size.width / extent.width
-            let sy = size.height / extent.height
-            current = current.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+        if extent.width > 1, extent.height > 1 {
+            let scale = min(size.width / extent.width, size.height / extent.height)
+            current = current.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            let scaled = current.extent
+            let offsetX = (size.width - scaled.width) / 2 - scaled.minX
+            let offsetY = (size.height - scaled.height) / 2 - scaled.minY
+            current = current.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
         }
 
         let bounds = CGRect(origin: .zero, size: size)
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        context.render(current, to: pixelBuffer, bounds: bounds, colorSpace: colorSpace)
+        // 先铺黑底，避免留白区域是未初始化显存
+        let backdrop = CIImage(color: .black).cropped(to: bounds)
+        context.render(current.composited(over: backdrop), to: pixelBuffer,
+                       bounds: bounds, colorSpace: colorSpace)
         return true
     }
 
