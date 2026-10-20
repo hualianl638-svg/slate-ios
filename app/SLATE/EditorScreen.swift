@@ -497,7 +497,13 @@ struct EditorScreen: View {
               let reference = model.state.lut.reference else { return }
         guard let item = lutStore.items.first(where: { $0.name == reference.displayName }),
               let lut = try? lutStore.resolved(item) else { return }
+
+        // applyLUT 会把强度重置为 1，这里还原存档里的强度
+        let savedIntensity = EditStateStore.shared.savedLUTIntensity(for: editKey)
         model.applyLUT(lut, name: item.name)
+        if let savedIntensity {
+            model.lutIntensity = savedIntensity
+        }
         playback.refresh()
     }
 
