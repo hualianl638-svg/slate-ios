@@ -86,6 +86,11 @@ public struct EditState: Identifiable, Equatable, Codable, Sendable {
     /// 灰片曲线（对数）类型，对应 `LogProfile.rawValue`。
     public var logProfileIndex: Int = 0
 
+    /// 还原 LUT 是否启用（功能条右侧开关）。
+    public var restoreEnabled: Bool = true
+    /// 自定义还原 LUT 的名称（Documents/RestoreLUTs/ 下的文件名，不含扩展名）。
+    public var restoreLUTName: String = ""
+
     /// 当前序列化版本。新增字段时递增，供迁移使用。
     public static let currentSchemaVersion = 1
 

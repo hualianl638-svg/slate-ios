@@ -197,6 +197,24 @@ final class EditorModel: ObservableObject {
         }
     }
 
+    /// 还原 LUT 开关。
+    var restoreEnabled: Bool {
+        get { state.restoreEnabled }
+        set {
+            state.restoreEnabled = newValue
+            requestRender()
+        }
+    }
+
+    /// 自定义还原 LUT 名称。
+    var restoreLUTName: String {
+        get { state.restoreLUTName }
+        set {
+            state.restoreLUTName = newValue
+            requestRender()
+        }
+    }
+
     @Published var hslSelectedBand: HSLBandID = .red
 
     /// 选中通道的色相偏移（-1...1，满量程 ±30°）。

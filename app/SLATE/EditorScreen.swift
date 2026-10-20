@@ -30,6 +30,7 @@ struct EditorScreen: View {
     @State private var tool: Tool = .basic
     @State private var showExport = false
     @State private var showFullPreview = false
+    @State private var showRestorePicker = false
     @StateObject private var playback = VideoPlayback()
     @State private var didConfigurePlayback = false
     @State private var comparing = false
@@ -71,6 +72,12 @@ struct EditorScreen: View {
         .background(Theme.bg.ignoresSafeArea())
         .sheet(isPresented: $showExport) {
             SLExportSheet(model: model, lutStore: lutStore)
+        }
+        .sheet(isPresented: $showRestorePicker) {
+            RestoreLUTPicker(model: model) {
+                model.requestRender()
+                playback.refresh()
+            }
         }
         .fullScreenCover(isPresented: $showFullPreview) {
             FullPreviewView(image: previewImage) {
@@ -404,46 +411,76 @@ struct EditorScreen: View {
         }
     }
 
-    // MARK: 灰片曲线
+    // MARK: 还原 LUT 工具条
 
-    /// 灰片曲线选择（方案 A：内置官方 LUT；方案 B：自定义还原 LUT）。
+    /// 左侧入口选择曲线，右侧开关控制是否启用。
     private var restoreBar: some View {
         Group {
             if videoURL != nil {
-                VStack(alignment: .leading, spacing: 6) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(LogProfile.allCases) { profile in
-                                let isOn = model.logProfile == profile
-                                SLChip(title: profile.title, isOn: isOn, compact: true) {
-                                    model.logProfile = profile
-                                    playback.refresh()
-                                }
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, SL.pad)
-                    }
+                HStack(spacing: 10) {
+                    Button {
+                        showRestorePicker = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "cube.transparent")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(model.restoreEnabled ? Theme.accent : Theme.meta)
 
-                    if let hint = model.logProfile.missingLUTHint {
-                        Text(hint)
-                            .font(.system(size: 10))
-                            .foregroundStyle(Theme.danger)
-                            .padding(.horizontal, SL.pad)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else if model.logProfile == .custom, let name = RestoreLUTLibrary.shared.customLUTName {
-                        Text("自定义还原 LUT：\(name)")
-                            .font(.system(size: 10))
-                            .foregroundStyle(Theme.log)
-                            .padding(.horizontal, SL.pad)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("还原 LUT")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(Theme.text)
+                                Text(restoreTitle)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Theme.meta)
+                                    .lineLimit(1)
+                            }
+
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Theme.meta)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+
+                    Spacer(minLength: 8)
+
+                    Toggle("", isOn: Binding(
+                        get: { model.restoreEnabled },
+                        set: { newValue in
+                            if newValue, model.logProfile == .off {
+                                // 开关打开但没选曲线时，默认选 S-Log3
+                                model.logProfile = .sLog3
+                            }
+                            model.restoreEnabled = newValue
+                            playback.refresh()
+                        }
+                    ))
+                    .labelsHidden()
+                    .tint(Theme.accent)
                 }
-                .padding(.vertical, 6)
+                .padding(.horizontal, SL.pad)
+                .padding(.vertical, 8)
                 .background(Theme.surface.opacity(0.6))
                 .overlay(alignment: .top) {
                     Rectangle().fill(Theme.line).frame(height: 0.5)
                 }
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Theme.line).frame(height: 0.5)
+                }
             }
+        }
+    }
+
+    private var restoreTitle: String {
+        switch model.logProfile {
+        case .off:
+            return "未选择曲线"
+        case .custom:
+            return model.restoreLUTName.isEmpty ? "未选择 LUT" : model.restoreLUTName
+        default:
+            return model.logProfile.title
         }
     }
 
@@ -594,7 +631,6 @@ struct EditorScreen: View {
 
                     ForEach(lutStore.items) { item in
                         let isOn = model.activeLUTName == item.name
-                        let isRestore = RestoreLUTLibrary.shared.customLUTName == item.name
                         Button {
                             if let lut = try? lutStore.resolved(item) {
                                 model.applyLUT(lut, name: item.name)
@@ -608,30 +644,7 @@ struct EditorScreen: View {
                                 .padding(.horizontal, 12)
                                 .frame(height: 30)
                                 .background(isOn ? Theme.accent : Theme.surface2, in: Capsule())
-                                .overlay(
-                                    Capsule().strokeBorder(
-                                        isRestore ? Theme.log : (isOn ? .clear : Theme.line),
-                                        lineWidth: isRestore ? 1 : 0.5
-                                    )
-                                )
-                                .contextMenu {
-                                    Button {
-                                        let lut = try? lutStore.resolved(item)
-                                        RestoreLUTLibrary.shared.setCustomLUT(lut, name: item.name)
-                                        model.logProfile = .custom
-                                        playback.refresh()
-                                    } label: {
-                                        Label("设为还原 LUT", systemImage: "cube.fill")
-                                    }
-                                    if isRestore {
-                                        Button(role: .destructive) {
-                                            RestoreLUTLibrary.shared.setCustomLUT(nil, name: nil)
-                                            playback.refresh()
-                                        } label: {
-                                            Label("取消还原 LUT", systemImage: "xmark.circle")
-                                        }
-                                    }
-                                }
+                                .overlay(Capsule().strokeBorder(isOn ? .clear : Theme.line, lineWidth: 0.5))
                         }
                         .buttonStyle(.plain)
                     }

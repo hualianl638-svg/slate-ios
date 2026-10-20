@@ -303,8 +303,12 @@ final class SLATERenderer {
         // 让白平衡/曝光仍在线性域计算，与普通照片走同一条链路。
         // 灰片还原：按用户在「灰片曲线」里选的类型取对应 LUT
         let logProfile = LogProfile(rawValue: state.logProfileIndex) ?? .off
+        let restoreLUT = state.restoreEnabled
+            ? RestoreLUTLibrary.shared.restoreLUT(for: logProfile,
+                                                 customName: state.restoreLUTName)
+            : nil
 
-        if let look = RestoreLUTLibrary.shared.restoreLUT(for: logProfile) {
+        if let look = restoreLUT {
             current = applyLUT(current, lut: look, intensity: 1.0)
             current = current.applyingFilter("CISRGBToneCurveToLinear")
         } else if logProfile != .off,
