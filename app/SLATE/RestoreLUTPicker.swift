@@ -183,9 +183,9 @@ struct RestoreLUTPicker: View {
         userLUTs = RestoreLUTLibrary.shared.userLUTs
     }
 
-    private func handleImport(_ result: Result<[URL], Error>) {
+    private func handleImport(_ result: Result<URL, Error>) {
         do {
-            guard let url = try result.get().first else { return }
+            let url = try result.get()
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
             let data = try Data(contentsOf: url)
