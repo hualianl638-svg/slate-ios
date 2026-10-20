@@ -554,6 +554,85 @@ final class SLATEExporter {
         return stillURL
     }
 
+    /// 内容标识符元数据（`com.apple.quicktime.content.identifier`）。
+    private static func contentIdentifierMetadata(_ identifier: String) -> AVMetadataItem {
+        let item = AVMutableMetadataItem()
+        item.key = "com.apple.quicktime.content.identifier" as NSString
+        item.keySpace = AVMetadataKeySpace(rawValue: "mdta")
+        item.value = identifier as NSString
+        item.dataType = "com.apple.metadata.datatype.UTF-8"
+        return item
+    }
+
+    /// 把配对标识符写进 JPEG 的 MakerApple 字典（key "17"）。
+    static func jpegDataWithAssetIdentifier(_ image: UIImage,
+                                            identifier: String,
+                                            quality: Double) -> Data? {
+        guard let cgImage = image.cgImage else { return nil }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output, "public.jpeg" as CFString, 1, nil
+        ) else { return nil }
+        let properties: [String: Any] = [
+            kCGImageDestinationLossyCompressionQuality as String: quality,
+            kCGImagePropertyMakerAppleDictionary as String: ["17": identifier],
+        ]
+        CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return output as Data
+    }
+
+    /// 构造 still-image-time 的元数据格式描述。
+    private static func makeStillImageTimeFormatDescription() -> CMMetadataFormatDescription? {
+        let spec: [String: Any] = [
+            kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as String:
+                "mdta/com.apple.quicktime.still-image-time",
+            kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType as String:
+                "com.apple.metadata.datatype.int8",
+        ]
+        var format: CMMetadataFormatDescription?
+        let status = CMMetadataFormatDescriptionCreateWithMetadataSpecifications(
+            allocator: kCFAllocatorDefault,
+            metadataType: kCMMetadataFormatType_Boxed,
+            metadataSpecifications: [spec] as CFArray,
+            formatDescriptionOut: &format
+        )
+        return status == noErr ? format : nil
+    }
+
+    /// 把时间戳整体平移，使输出片段从 0 开始。
+    private static func retimed(_ sample: CMSampleBuffer, subtracting offset: CMTime) -> CMSampleBuffer? {
+        if offset == .zero { return sample }
+        var timing = CMSampleTimingInfo()
+        let status = CMSampleBufferGetSampleTimingInfo(sample, at: 0, timingInfoOut: &timing)
+        guard status == noErr else { return nil }
+        timing.presentationTimeStamp = CMTimeSubtract(timing.presentationTimeStamp, offset)
+        if CMTimeCompare(timing.presentationTimeStamp, .zero) < 0 { return nil }
+        timing.decodeTimeStamp = .invalid
+        var newBuffer: CMSampleBuffer?
+        let created = CMSampleBufferCreateCopyWithNewTiming(
+            allocator: kCFAllocatorDefault,
+            sampleBuffer: sample,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleBufferOut: &newBuffer
+        )
+        guard created == noErr else { return nil }
+        return newBuffer
+    }
+
+    /// 校验视频可播放、有视频轨、时长合理。
+    private static func validateVideo(url: URL) async throws -> Bool {
+        let asset = AVURLAsset(url: url)
+        guard let tracks = try? await asset.loadTracks(withMediaType: .video), !tracks.isEmpty else {
+            return false
+        }
+        guard let duration = try? await asset.load(.duration) else { return false }
+        let seconds = CMTimeGetSeconds(duration)
+        guard seconds.isFinite, seconds > 0.3, seconds < 30 else { return false }
+        return (try? await asset.load(.isPlayable)) ?? false
+    }
+
     /// 把「静帧 + 视频」作为一对实况照片写入相册。
     ///
     /// - Returns: 新建资源的 localIdentifier。
