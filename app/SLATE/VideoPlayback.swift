@@ -25,6 +25,8 @@ final class VideoPlayback: ObservableObject {
     @Published private(set) var currentTime: Double = 0
     @Published private(set) var duration: Double = 0
     @Published private(set) var isMuted = false
+    /// 跳过调色（长按「对比」时显示原片）。
+    var bypassGrading = false
 
     private var player: AVPlayer?
     private var item: AVPlayerItem?
@@ -144,7 +146,7 @@ final class VideoPlayback: ObservableObject {
 
     /// 调色参数变化时刷新当前帧（暂停状态下的实时预览）。
     func refresh() {
-        guard !isPlaying else { return }
+        // 不再限制"仅暂停时刷新"：对比切换、曲线切换在播放中也要立刻看到
         renderCurrentFrame(force: true)
     }
 
@@ -183,7 +185,8 @@ final class VideoPlayback: ObservableObject {
             image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         }
 
-        let rendered = renderer.processedImage(image, state: state, lut: lut)
+        // 长按对比时直接显示未调色帧
+        let rendered = bypassGrading ? image : renderer.processedImage(image, state: state, lut: lut)
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         let cgImage = context.createCGImage(rendered, from: rendered.extent, format: .RGBA8, colorSpace: colorSpace)
 

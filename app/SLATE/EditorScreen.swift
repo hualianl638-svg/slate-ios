@@ -89,7 +89,7 @@ struct EditorScreen: View {
             }
         }
         .fullScreenCover(isPresented: $showFullPreview) {
-            FullPreviewView(image: previewImage) {
+            FullPreviewView(playback: playback, image: previewImage) {
                 showFullPreview = false
             }
         }
@@ -286,17 +286,31 @@ struct EditorScreen: View {
         .buttonStyle(.plain)
     }
 
+    /// 按住看原片。用 DragGesture(minimumDistance: 0) 而不是 onLongPressGesture：
+    /// 后者在手势竞争下容易不触发，这正是之前"按了没反应"的原因。
     private var compareButton: some View {
         Text("对比")
             .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(Theme.text)
+            .foregroundStyle(comparing ? Theme.onAccent : Theme.text)
             .padding(.horizontal, 11)
             .padding(.vertical, 6)
-            .background(.black.opacity(0.55), in: Capsule())
-            .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 0.5))
-            .onLongPressGesture(minimumDuration: 0.05, pressing: { pressed in
-                comparing = pressed
-            }, perform: {})
+            .background(comparing ? Theme.accent : .black.opacity(0.55), in: Capsule())
+            .overlay(
+                Capsule().strokeBorder(comparing ? .clear : Theme.line, lineWidth: 0.5)
+            )
+            .contentShape(Capsule())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in setComparing(true) }
+                    .onEnded { _ in setComparing(false) }
+            )
+    }
+
+    private func setComparing(_ on: Bool) {
+        guard comparing != on else { return }
+        comparing = on
+        playback.bypassGrading = on
+        playback.refresh()
     }
 
     // MARK: 时间轴

@@ -2,7 +2,7 @@
 //  FullPreviewView.swift
 //  SLATE
 //
-//  放大预览：整屏显示当前画面（照片为渲染结果，视频为播放器当前帧）。
+//  放大预览：整屏显示当前画面，视频可在此直接播放/暂停。
 //
 
 import SwiftUI
@@ -10,15 +10,23 @@ import UIKit
 
 struct FullPreviewView: View {
 
+    @ObservedObject var playback: VideoPlayback
     let image: UIImage?
     var onClose: () -> Void
+
+    /// 视频优先用播放器当前帧；照片用传入的渲染结果。
+    private var displayImage: UIImage? {
+        playback.frame ?? image
+    }
+
+    private var isVideo: Bool { playback.duration > 0 }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if let image {
-                Image(uiImage: image)
+            if let displayImage {
+                Image(uiImage: displayImage)
                     .resizable()
                     .scaledToFit()
                     .ignoresSafeArea()
@@ -43,7 +51,32 @@ struct FullPreviewView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
+
                 Spacer()
+
+                if isVideo {
+                    HStack(spacing: 16) {
+                        Button {
+                            playback.togglePlay()
+                        } label: {
+                            Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundStyle(Theme.onAccent)
+                                .frame(width: 56, height: 56)
+                                .background(Theme.accent, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+
+                        Text(playback.timeText)
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            .monoDigits()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(.black.opacity(0.55), in: Capsule())
+                    }
+                    .padding(.bottom, 40)
+                }
             }
         }
     }
