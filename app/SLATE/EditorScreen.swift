@@ -35,6 +35,8 @@ struct EditorScreen: View {
     @State private var showRestorePicker = false
     @State private var didRestoreStyleLUT = false
     @State private var didRestoreEdit = false
+    /// 打开全屏预览时不该销毁播放器（它会触发本视图 onDisappear）
+    @State private var suppressTeardown = false
     @StateObject private var playback = VideoPlayback()
     @State private var didConfigurePlayback = false
     @State private var comparing = false
@@ -121,7 +123,12 @@ struct EditorScreen: View {
             // 手指滑出按钮区域时 onEnded 可能不触发，离开页面时强制复位
             comparing = false
             playback.bypassGrading = false
-            playback.teardown()
+            // 弹全屏预览/面板也会走到这里，此时不能销毁播放器
+            if suppressTeardown {
+                suppressTeardown = false
+            } else {
+                playback.teardown()
+            }
             didConfigurePlayback = false
         }
     }
@@ -291,6 +298,7 @@ struct EditorScreen: View {
 
     private var zoomButton: some View {
         Button {
+            suppressTeardown = true
             showFullPreview = true
         } label: {
             Image(systemName: "arrow.up.left.and.arrow.down.right")

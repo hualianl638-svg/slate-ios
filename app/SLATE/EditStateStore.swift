@@ -25,6 +25,49 @@ struct SavedEdit: Codable {
     /// 风格 LUT 强度（applyLUT 会重置为 1，恢复时需要还原）
     var lutIntensity: Double
     var savedAt: Date
+    /// 存档格式版本，便于将来升级。
+    var version: Int
+
+    /// 手工解码：所有后加字段都给默认值。
+    ///
+    /// 这是必须的——`lutIntensity` / `savedAt` / `version` 是后来新增的非可选字段，
+    /// 合成解码器遇到旧存档缺字段会直接抛错，导致 restore 返回 nil，
+    /// 用户此前保存的所有调整会全部丢失。
+    init(stateJSON: Data,
+         cropMask: CropMaskSettings,
+         logProfileIndex: Int,
+         restoreEnabled: Bool,
+         restoreLUTName: String,
+         trimStart: Double,
+         trimEnd: Double,
+         lutIntensity: Double,
+         savedAt: Date,
+         version: Int = 1) {
+        self.stateJSON = stateJSON
+        self.cropMask = cropMask
+        self.logProfileIndex = logProfileIndex
+        self.restoreEnabled = restoreEnabled
+        self.restoreLUTName = restoreLUTName
+        self.trimStart = trimStart
+        self.trimEnd = trimEnd
+        self.lutIntensity = lutIntensity
+        self.savedAt = savedAt
+        self.version = version
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        stateJSON = try container.decode(Data.self, forKey: .stateJSON)
+        cropMask = (try? container.decodeIfPresent(CropMaskSettings.self, forKey: .cropMask)) ?? CropMaskSettings()
+        logProfileIndex = (try? container.decodeIfPresent(Int.self, forKey: .logProfileIndex)) ?? 0
+        restoreEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .restoreEnabled)) ?? false
+        restoreLUTName = (try? container.decodeIfPresent(String.self, forKey: .restoreLUTName)) ?? ""
+        trimStart = (try? container.decodeIfPresent(Double.self, forKey: .trimStart)) ?? 0
+        trimEnd = (try? container.decodeIfPresent(Double.self, forKey: .trimEnd)) ?? 1
+        lutIntensity = (try? container.decodeIfPresent(Double.self, forKey: .lutIntensity)) ?? 1
+        savedAt = (try? container.decodeIfPresent(Date.self, forKey: .savedAt)) ?? Date()
+        version = (try? container.decodeIfPresent(Int.self, forKey: .version)) ?? 0
+    }
 }
 
 final class EditStateStore {
