@@ -69,6 +69,7 @@ struct EditorScreen: View {
             panelWrap
             bottomBar
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.bg.ignoresSafeArea())
         .sheet(isPresented: $showExport) {
             SLExportSheet(model: model, lutStore: lutStore)
@@ -140,6 +141,8 @@ struct EditorScreen: View {
         }
         .padding(.horizontal, 4)
         .frame(height: 52)
+        // 竖屏时确保返回按钮始终在可点区域内
+        .background(Theme.bg)
     }
 
     // MARK: 预览
@@ -201,8 +204,9 @@ struct EditorScreen: View {
                     .padding(12)
             }
         }
-        .aspectRatio(previewAspect, contentMode: .fit)
-        .frame(maxWidth: .infinity)
+        // 弹性高度：吃掉导航/时间轴/工具条/面板/底栏之外的剩余空间。
+        // 不再用 aspectRatio 撑高，否则竖屏素材会把整个 VStack 顶出屏幕。
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
     }
 
@@ -479,11 +483,12 @@ struct EditorScreen: View {
             return "未选择曲线"
         case .custom:
             guard !model.restoreLUTName.isEmpty else { return "未选择 LUT" }
-            // 文件被删/损坏时给出明确提示，而不是静默不生效
-            if RestoreLUTLibrary.shared.userLUT(named: model.restoreLUTName) == nil {
-                return "\(model.restoreLUTName)（LUT 缺失，请重新导入）"
-            }
-            return model.restoreLUTName
+            // 只查目录列表，不在这里解析 LUT 文件。
+            // 之前调用 userLUT(named:) 会在 body 求值时同步解析近 1MB 文本，造成卡顿。
+            let exists = RestoreLUTLibrary.shared.userLUTs.contains { $0.name == model.restoreLUTName }
+            return exists
+                ? model.restoreLUTName
+                : "\(model.restoreLUTName)（LUT 缺失，请重新导入）"
         default:
             return model.logProfile.title
         }
@@ -500,7 +505,7 @@ struct EditorScreen: View {
             .padding(.top, 14)
             .padding(.bottom, 12)
         }
-        .frame(maxHeight: 268)
+        .frame(height: 240)
         .background(Theme.bg)
     }
 
