@@ -200,7 +200,7 @@ struct LibraryScreen: View {
         }
         .alert("导入失败", isPresented: Binding(
             get: { store.errorText != nil },
-            set: { if !\ { store.errorText = nil } }
+            set: { if !$0 { store.errorText = nil } }
         )) {
             Button("好", role: .cancel) { store.errorText = nil }
         } message: {
