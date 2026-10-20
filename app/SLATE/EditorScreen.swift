@@ -31,6 +31,7 @@ struct EditorScreen: View {
     @State private var showExport = false
     @State private var showFullPreview = false
     @State private var showRestorePicker = false
+    @State private var didRestoreStyleLUT = false
     @StateObject private var playback = VideoPlayback()
     @State private var didConfigurePlayback = false
     @State private var comparing = false
@@ -93,7 +94,13 @@ struct EditorScreen: View {
                 showFullPreview = false
             }
         }
-        .onAppear { configurePlaybackIfNeeded() }
+        .onAppear {
+            configurePlaybackIfNeeded()
+            // 恢复的编辑状态里包含选段与风格 LUT，进入时同步给播放器 / LUT 状态
+            syncTrim()
+            playback.refresh()
+            restoreStyleLUTIfNeeded()
+        }
         .onChange(of: videoURL) { _, _ in configurePlaybackIfNeeded() }
         .onChange(of: tool) { _, newValue in
             // 编辑裁剪时绕过裁剪，画面完整显示，手柄坐标才能正确映射
@@ -460,6 +467,21 @@ struct EditorScreen: View {
 
     private func syncTrim() {
         playback.applyTrim(start: model.trimStart, end: model.trimEnd)
+    }
+
+    /// 恢复的编辑状态里若带风格 LUT，重新从 LUT 库解析并套用。
+    ///
+    /// EditState 只存 LUT 的引用（名称/路径），渲染器需要真实的 LUT3D，
+    /// 所以进入编辑器要把引用重新解析一次，否则「上次套的 LUT」会消失。
+    private func restoreStyleLUTIfNeeded() {
+        guard !didRestoreStyleLUT else { return }
+        didRestoreStyleLUT = true
+        guard model.activeLUTName == nil,
+              let reference = model.state.lut.reference else { return }
+        guard let item = lutStore.items.first(where: { $0.name == reference.displayName }),
+              let lut = try? lutStore.resolved(item) else { return }
+        model.applyLUT(lut, name: item.name)
+        playback.refresh()
     }
 
     /// 把播放头限制在选段内。

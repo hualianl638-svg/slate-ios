@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import CryptoKit
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -92,7 +93,7 @@ final class LibraryStore: ObservableObject {
                     videoURL: nil,
                     title: "照片",
                     subtitle: "\(Int(image.size.width)) × \(Int(image.size.height))",
-                    editKey: "photo-\(Int(image.size.width))x\(Int(image.size.height))-\(data.count)"
+                    editKey: Self.photoKey(for: data)
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
             }
@@ -138,6 +139,16 @@ final class LibraryStore: ObservableObject {
         generator.maximumSize = CGSize(width: 1200, height: 1200)
         let (cgImage, _) = try await generator.image(at: .zero)
         return UIImage(cgImage: cgImage)
+    }
+
+    /// 照片的稳定标识键。
+    ///
+    /// 之前用「尺寸 + 字节数」，同尺寸同体积的不同照片会撞键、互相串用调整；
+    /// 改成文件内容 SHA256 前 16 位，几乎不可能碰撞。
+    private nonisolated static func photoKey(for data: Data) -> String {
+        let digest = SHA256.hash(data: data)
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return "photo-" + hex.prefix(16)
     }
 
     private nonisolated static func shortSize(of url: URL) -> String {
