@@ -88,21 +88,21 @@ final class VideoPlayback: ObservableObject {
         ) { [weak self] time in
             guard let self else { return }
             let seconds = CMTimeGetSeconds(time)
-            self.currentTime = seconds
+            // 回调已在 .main 队列，但显式标注 MainActor 更稳（部分 SDK 会把闭包标为 @Sendable）
+            Task { @MainActor in
+                self.currentTime = seconds
 
-            // 播放到选段终点 -> 回到起点继续（循环预览）
-            if self.isPlaying, self.duration > 0 {
-                let endTime = self.duration * self.trimEndFraction
-                if seconds >= endTime - 0.03 {
-                    let startTime = self.duration * self.trimStartFraction
-                    self.player?.seek(to: CMTime(seconds: startTime, preferredTimescale: 600))
-                    self.currentTime = startTime
+                // 播放到选段终点 -> 回到起点继续（循环预览）
+                if self.isPlaying, self.duration > 0 {
+                    let endTime = self.duration * self.trimEndFraction
+                    if seconds >= endTime - 0.03 {
+                        let startTime = self.duration * self.trimStartFraction
+                        self.player?.seek(to: CMTime(seconds: startTime, preferredTimescale: 600))
+                        self.currentTime = startTime
+                    }
                 }
             }
         }
-
-        renderCurrentFrame(force: true)
-    }
 
     func teardown() {
         timer?.invalidate()

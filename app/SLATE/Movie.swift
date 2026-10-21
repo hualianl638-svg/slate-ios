@@ -13,7 +13,7 @@ struct Movie: Transferable {
         } importing: { received in
             let ext = received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension
             let name = "import-\(UUID().uuidString).\(ext)"
-            let dest = URL.cachesDirectory.appending(path: name)
+            let dest = URL.documentsDirectory.appending(path: name)
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.copyItem(at: received.file, to: dest)
             return Self(url: dest)
