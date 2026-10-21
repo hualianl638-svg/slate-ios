@@ -104,6 +104,8 @@ final class VideoPlayback: ObservableObject {
             }
         }
 
+    }
+
     func teardown() {
         timer?.invalidate()
         timer = nil
