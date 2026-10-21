@@ -30,6 +30,9 @@ targets:
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
+        # 让 Documents 目录出现在「文件」App 里，便于备份 LUT 与存档
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         NSPhotoLibraryUsageDescription: 需要访问相册，用于导入要调色的视频和照片。
