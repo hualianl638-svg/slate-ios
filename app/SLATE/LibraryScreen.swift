@@ -9,6 +9,7 @@ import AVFoundation
 import CryptoKit
 import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 import UIKit
 
 // MARK: - 素材载荷
@@ -236,7 +237,38 @@ struct LibraryScreen: View {
         GridItem(.flexible(), spacing: 4),
     ]
 
-    var body: some View {
+        /// 从「文件」App 导入 RAW 原片（支持多选）。
+    private func importRawFiles(_ urls: [URL]) {
+        Task {
+            for url in urls {
+                let accessing = url.startAccessingSecurityScopedResource()
+                do {
+                    let data = try Data(contentsOf: url)
+                    guard RawImage.looksLikeRaw(data), let image = RawImage.decode(data) else {
+                        throw RawImage.RawError.unsupported
+                    }
+                    let key = "raw-" + url.lastPathComponent + "-" + String(data.count)
+                    _ = try RawImage.saveOriginal(data, key: key)
+                    let payload = LibraryPayload(
+                        image: image,
+                        isVideo: false,
+                        videoURL: nil,
+                        title: url.deletingPathExtension().lastPathComponent,
+                        subtitle: "\(Int(image.size.width)) × \(Int(image.size.height)) · RAW",
+                        editKey: key
+                    )
+                    store.items.insert(LibraryItem(payload: payload), at: 0)
+                    store.errorText = nil
+                } catch {
+                    store.errorText = error.localizedDescription
+                }
+                if accessing { url.stopAccessingSecurityScopedResource() }
+            }
+            LibraryDisk.save(store.items)
+        }
+    }
+
+var body: some View {
         VStack(spacing: 0) {
             header
             scroll
@@ -295,6 +327,7 @@ struct LibraryScreen: View {
                         Image(systemName: "photo.on.rectangle.angled")
                             .font(.system(size: 11, weight: .semibold))
                         Text("从相册选择")
+                        SLTextButton(title: "导入 RAW") { showRawImporter = true }
                             .font(.system(size: 12, weight: .medium))
                     }
                     .foregroundStyle(Theme.onAccent)
