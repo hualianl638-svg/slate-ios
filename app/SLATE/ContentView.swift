@@ -60,6 +60,9 @@ final class EditorModel: ObservableObject {
     func load(image: UIImage, isVideo: Bool, colorInfo: VideoColorInfo?) {
         let ci = CIImage(image: image)
         self.sourceImage = ci
+        // 全分辨率原图只保留在 sourceImage(导出用) 与 originalUIImage(对比用)，
+        // 不要再复制一份到 displayImage——45MP 会多占约 180MB。
+        self.displayImage = nil
         // 预览源图：长边超过 2048 就降采样（RAW 常见 6000×4000）
         let longest = max(ci.extent.width, ci.extent.height)
         if longest > 2048 {
@@ -71,7 +74,6 @@ final class EditorModel: ObservableObject {
         self.originalUIImage = image
         self.state.mediaKind = isVideo ? .video : .image
         self.state.videoColorInfo = colorInfo
-        self.displayImage = image
         requestRender()
     }
 

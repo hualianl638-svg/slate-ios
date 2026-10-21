@@ -127,8 +127,14 @@ enum RawImage {
                 output = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             }
         }
-        let context = CIContext(options: [.workingColorSpace: CGColorSpaceCreateDeviceRGB()])
-        guard let cgImage = context.createCGImage(output, from: output.extent) else { return nil }
+        // 用线性 sRGB 工作空间，与管线里 CISRGBToneCurveToLinear 的假设一致
+        let context = CIContext(options: [.workingColorSpace: CGColorSpace.extendedLinearSRGB])
+        guard let cgImage = context.createCGImage(
+            output,
+            from: output.extent,
+            format: .RGBA8,
+            colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
+        ) else { return nil }
         return UIImage(cgImage: cgImage)
     }
 
