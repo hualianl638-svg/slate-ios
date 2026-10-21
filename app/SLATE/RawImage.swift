@@ -128,7 +128,7 @@ enum RawImage {
         guard (try? data.write(to: temporary)) != nil else { return nil }
         defer { try? FileManager.default.removeItem(at: temporary) }
 
-        guard var output = CIImage(contentsOf: temporary, options: [.applyOrientationProperty: true]) else {
+        guard var output = CIImage(contentsOf: temporary) else {
             return nil
         }
         if let maxPixelSize {

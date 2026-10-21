@@ -163,7 +163,7 @@ final class LibraryStore: ObservableObject {
                     // 必须剥掉扩展名才与 hasOriginal/deleteOriginal 的 key 一致；
                     // 最后兜底用 UUID，避免所有无 identifier 的照片共用同一个存档键。
                     editKey: picker.itemIdentifier.map { "photo-" + $0 }
-                        ?? (rawKey as NSString?)?.deletingPathExtension
+                        ?? rawKey.map { ($0 as NSString).deletingPathExtension }
                         ?? UUID().uuidString
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
