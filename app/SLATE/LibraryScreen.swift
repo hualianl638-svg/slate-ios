@@ -30,11 +30,24 @@ struct LibraryPayload {
 
 /// 图库条目。
 struct LibraryItem: Identifiable {
-    let id = UUID()
+    var id = UUID()
     var payload: LibraryPayload
-    var thumbnail: UIImage { payload.image }
+    /// 网格缩略图（从磁盘恢复时与源图分开保存；没有则退回源图）
+    var thumbnailImage: UIImage?
     var isVideo: Bool { payload.isVideo }
     var createdAt: Date = Date()
+
+    var thumbnail: UIImage { thumbnailImage ?? payload.image }
+
+    init(payload: LibraryPayload,
+         createdAt: Date = Date(),
+         thumbnailImage: UIImage? = nil,
+         id: UUID = UUID()) {
+        self.payload = payload
+        self.createdAt = createdAt
+        self.thumbnailImage = thumbnailImage
+        self.id = id
+    }
 }
 
 // MARK: - 素材库
@@ -44,6 +57,11 @@ final class LibraryStore: ObservableObject {
 
     @Published private(set) var items: [LibraryItem] = []
     @Published var errorText: String?
+
+    init() {
+        // 从磁盘恢复图库（上次运行导入的素材）
+        items = LibraryDisk.load()
+    }
 
     /// 从系统相册选择结果导入一条素材。
     func importItem(_ picker: PhotosPickerItem) async {
@@ -82,6 +100,7 @@ final class LibraryStore: ObservableObject {
                     editKey: "video-\(picker.itemIdentifier ?? movie.url.lastPathComponent)"
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
+                LibraryDisk.save(items)
             } else {
                 guard let data = try await picker.loadTransferable(type: Data.self),
                       let image = UIImage(data: data) else {
@@ -96,6 +115,7 @@ final class LibraryStore: ObservableObject {
                     editKey: picker.itemIdentifier.map { "photo-" + $0 } ?? Self.photoKey(for: data)
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
+                LibraryDisk.save(items)
             }
         } catch {
             errorText = error.localizedDescription
