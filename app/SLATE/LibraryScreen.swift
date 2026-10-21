@@ -71,10 +71,20 @@ final class LibraryStore: ObservableObject {
             type.conforms(to: .movie) || type.conforms(to: .video)
         }
 
-        // 相册权限：未授权时 PhotoKit 拿不到 RAW 原始资源，
-        // 会静默退化成 JPEG 预览——与「不降级」需求冲突，所以先请求。
-        if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
-            _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        // 只有"可能是 RAW"时才需要相册原始资源；普通照片走 PhotosPicker 数据即可。
+        let rawLikely = picker.supportedContentTypes.contains { $0.conforms(to: .rawImage) }
+        if rawLikely {
+            let status = PHPhotoLibrary.authorizationStatus(for: .read)
+            switch status {
+            case .notDetermined:
+                let granted = await PHPhotoLibrary.requestAuthorization(for: .read)
+                if granted != .authorized { throw RawImage.RawError.permissionDenied }
+            case .authorized:
+                break
+            default:
+                // .limited / .denied / .restricted：拿不到 RAW 原片 -> 直接报错，不降级
+                throw RawImage.RawError.permissionDenied
+            }
         }
 
         do {
@@ -149,8 +159,12 @@ final class LibraryStore: ObservableObject {
                     title: isRaw ? "RAW 照片" : "照片",
                     subtitle: "\(Int(image.size.width)) × \(Int(image.size.height))"
                         + (isRaw ? " · RAW" : ""),
+                    // rawKey 是 saveOriginal 返回的**文件名**（key + 扩展名），
+                    // 必须剥掉扩展名才与 hasOriginal/deleteOriginal 的 key 一致；
+                    // 最后兜底用 UUID，避免所有无 identifier 的照片共用同一个存档键。
                     editKey: picker.itemIdentifier.map { "photo-" + $0 }
-                        ?? rawKey ?? Self.photoKey(for: Data())
+                        ?? (rawKey as NSString?)?.deletingPathExtension
+                        ?? UUID().uuidString
                 )
                 items.insert(LibraryItem(payload: payload), at: 0)
                 LibraryDisk.save(items)

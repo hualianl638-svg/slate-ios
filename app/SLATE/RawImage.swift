@@ -90,7 +90,8 @@ enum RawImage {
         let resources = PHAssetResource.assetResources(for: asset)
 
         let brandPrefixes = ["com.canon", "com.sony", "com.nikon", "com.fuji", "com.dji",
-                             "com.adobe", "com.panasonic", "com.olympus", "com.pentax", "com.sigma"]
+                             "com.adobe", "com.panasonic", "com.olympus", "com.pentax", "com.sigma",
+                             "com.apple.camera-raw-image"]   // iPhone ProRAW
         let candidates = resources.filter { resource in
             let uti = resource.uniformTypeIdentifier.lowercased()
             if brandPrefixes.contains(where: { uti.hasPrefix($0) }) { return true }
@@ -183,6 +184,7 @@ enum RawImage {
     enum RawError: LocalizedError {
         case capacityExceeded(limitMB: Int)
         case unsupported
+        case permissionDenied
 
         var errorDescription: String? {
             switch self {
@@ -190,6 +192,8 @@ enum RawImage {
                 return "RAW 存储已满（上限 \(limitMB)MB），请到图库删除部分 RAW 素材后再导入"
             case .unsupported:
                 return "此 RAW 格式系统无法解码（支持 CR2/CR3/ARW/NEF/RAF/DNG 等），请改用 JPEG/HEIC"
+            case .permissionDenied:
+                return "取回 RAW 原片需要相册「完全访问」权限。请到 设置 › 隐私与安全性 › 照片 › SLATE 改为完全访问后重试；也可以点「导入 RAW」从文件 App 选择原片。"
             }
         }
     }
