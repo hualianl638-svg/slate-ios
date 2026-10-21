@@ -73,21 +73,21 @@ final class LibraryStore: ObservableObject {
 
         // 只有"可能是 RAW"时才需要相册原始资源；普通照片走 PhotosPicker 数据即可。
         let rawLikely = picker.supportedContentTypes.contains { $0.conforms(to: .rawImage) }
-        if rawLikely {
-            let status = PHPhotoLibrary.authorizationStatus(for: .read)
-            switch status {
-            case .notDetermined:
-                let granted = await PHPhotoLibrary.requestAuthorization(for: .read)
-                if granted != .authorized { throw RawImage.RawError.permissionDenied }
-            case .authorized:
-                break
-            default:
-                // .limited / .denied / .restricted：拿不到 RAW 原片 -> 直接报错，不降级
-                throw RawImage.RawError.permissionDenied
-            }
-        }
 
         do {
+            // 权限检查必须在 do 内，throw 才能被下面的 catch 接住并显示给用户。
+            if rawLikely {
+                switch PHPhotoLibrary.authorizationStatus(for: .read) {
+                case .notDetermined:
+                    let granted = await PHPhotoLibrary.requestAuthorization(for: .read)
+                    guard granted == .authorized else { throw RawImage.RawError.permissionDenied }
+                case .authorized:
+                    break
+                default:
+                    // .limited / .denied / .restricted：拿不到 RAW 原片 -> 直接报错，不降级
+                    throw RawImage.RawError.permissionDenied
+                }
+            }
             if isVideo {
                 guard let movie = try await picker.loadTransferable(type: Movie.self) else {
                     throw LibraryError.unsupported

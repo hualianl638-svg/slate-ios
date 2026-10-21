@@ -101,11 +101,21 @@ enum RawImage {
             return nil
         }
 
+        // 注意：requestData 的尾随闭包会绑定到 completionHandler（只收 1 个参数），
+        // 且数据是分块多次回调的，不能在那里直接 resume。改用 writeData 落临时文件。
+        let temporary = FileManager.default.temporaryDirectory
+            .appendingPathComponent("raw-src-\(UUID().uuidString).dat")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+
         return await withCheckedContinuation { continuation in
             let options = PHAssetResourceRequestOptions()
             options.isNetworkAccessAllowed = true
-            PHAssetResourceManager.default().requestData(for: raw, options: options) { data, _, _ in
-                continuation.resume(returning: data)
+            PHAssetResourceManager.default().writeData(for: raw, toFile: temporary, options: options) { error in
+                guard error == nil else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: try? Data(contentsOf: temporary))
             }
         }
     }
