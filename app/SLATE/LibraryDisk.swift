@@ -69,8 +69,9 @@ enum LibraryDisk {
                             try? manager.copyItem(at: source, to: mediaURL)
                         }
                     } else {
-                        // RAW 素材要保留全分辨率（导出用），普通照片压到 2048 长边
-                        let isRaw = item.payload.subtitle.contains("RAW")
+                        // RAW 素材要保留全分辨率（导出用），普通照片压到 2048 长边。
+                        // 判据用"是否存在原片"，而不是 subtitle 文本（文本会被改写/本地化）。
+                        let isRaw = RawImage.hasOriginal(key: item.payload.editKey)
                         let edge: CGFloat = isRaw ? 12000 : 2048
                         let quality: CGFloat = isRaw ? 0.96 : 0.9
                         if let data = scaled(item.payload.image, maxEdge: edge)

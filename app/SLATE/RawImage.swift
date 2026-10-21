@@ -148,6 +148,27 @@ enum RawImage {
         return name
     }
 
+    /// 该素材是否存过 RAW 原片（按 editKey 前缀匹配，不依赖 subtitle 文本）。
+    static func hasOriginal(key: String) -> Bool {
+        originalName(for: key) != nil
+    }
+
+    /// 删除该素材的 RAW 原片（返回是否真的删了文件）。
+    @discardableResult
+    static func deleteOriginal(key: String) -> Bool {
+        guard let name = originalName(for: key) else { return false }
+        try? FileManager.default.removeItem(at: originalsDirectory.appendingPathComponent(name))
+        return true
+    }
+
+    private static func originalName(for key: String) -> String? {
+        let safeKey = key.replacingOccurrences(of: "/", with: "-")
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            atPath: originalsDirectory.path
+        ) else { return nil }
+        return files.first { $0.hasPrefix(safeKey + ".") }
+    }
+
     /// 读取已保存的 RAW 原片。
     static func originalData(name: String) -> Data? {
         try? Data(contentsOf: originalsDirectory.appendingPathComponent(name))
