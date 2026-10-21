@@ -50,7 +50,7 @@ enum RawImage {
         return total
     }
 
-    static let capacityLimit: Int64 = 700 * 1024 * 1024   // 0.7 GB
+    static let capacityLimit: Int64 = 2000 * 1024 * 1024  // 2 GB（超过提示清理）
 
     /// 从文件头判断是不是 RAW（相册临时文件可能没有后缀）。
     static func looksLikeRaw(_ data: Data) -> Bool {
