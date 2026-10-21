@@ -46,3 +46,13 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         DEVELOPMENT_TEAM: ""
+
+schemes:
+  SLATE:
+    build:
+      targets:
+        SLATE: all
+    run:
+      config: Release
+    archive:
+      config: Release
