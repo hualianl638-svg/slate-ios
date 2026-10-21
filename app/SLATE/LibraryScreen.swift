@@ -102,20 +102,40 @@ final class LibraryStore: ObservableObject {
                 items.insert(LibraryItem(payload: payload), at: 0)
                 LibraryDisk.save(items)
             } else {
-                guard let data = try await picker.loadTransferable(type: Data.self),
-                      let image = UIImage(data: data) else {
-                    throw LibraryError.unsupported
+
+                // RAW 优先：相册里选 RAW 时 PhotosPicker 只给 JPEG 预览，
+                // 必须用 PhotoKit 取回原始数据再解码；解不出来直接报错（按需求：不降级）。
+                var image: UIImage?
+                var isRaw = false
+                var rawKey: String?
+                if let identifier = picker.itemIdentifier,
+                   let rawData = await RawImage.loadRawData(identifier: identifier) {
+                    guard let decoded = RawImage.decode(rawData) else {
+                        throw RawImage.RawError.unsupported
+                    }
+                    image = decoded
+                    isRaw = true
+                    rawKey = try RawImage.saveOriginal(rawData, key: "photo-" + identifier)
                 }
-                let payload = LibraryPayload(
-                    image: image,
-                    isVideo: false,
-                    videoURL: nil,
-                    title: "照片",
-                    subtitle: "\(Int(image.size.width)) × \(Int(image.size.height))",
-                    editKey: picker.itemIdentifier.map { "photo-" + $0 } ?? Self.photoKey(for: data)
-                )
-                items.insert(LibraryItem(payload: payload), at: 0)
-                LibraryDisk.save(items)
+                if image == nil {
+                    guard let data = try await picker.loadTransferable(type: Data.self) else {
+                        throw LibraryError.unsupported
+                    }
+                    if RawImage.looksLikeRaw(data) {
+                        guard let decoded = RawImage.decode(data) else {
+                            throw RawImage.RawError.unsupported
+                        }
+                        image = decoded
+                        isRaw = true
+                        rawKey = try RawImage.saveOriginal(data, key: picker.itemIdentifier.map { "photo-" + $0 } ?? Self.photoKey(for: data))
+                    } else {
+                        guard let decoded = UIImage(data: data) else { throw LibraryError.unsupported }
+                        image = decoded
+                    }
+                }
+                guard let image else { throw LibraryError.unsupported }
+                _ = rawKey
+
             }
         } catch {
             errorText = error.localizedDescription
@@ -195,6 +215,7 @@ struct LibraryScreen: View {
     var onOpen: (LibraryPayload) -> Void
 
     @State private var pickerItem: PhotosPickerItem?
+    @State private var showRawImporter = false
     @State private var filter: Filter = .all
     @State private var showImporter = false
 
@@ -219,6 +240,13 @@ struct LibraryScreen: View {
         VStack(spacing: 0) {
             header
             scroll
+        }
+        .fileImporter(
+            isPresented: $showRawImporter,
+            allowedContentTypes: [.data],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result { importRawFiles(urls) }
         }
         .alert("导入失败", isPresented: Binding(
             get: { store.errorText != nil },

@@ -68,9 +68,15 @@ enum LibraryDisk {
                         if let source = item.payload.videoURL {
                             try? manager.copyItem(at: source, to: mediaURL)
                         }
-                    } else if let data = scaled(item.payload.image, maxEdge: 2048)
-                        .jpegData(compressionQuality: 0.9) {
-                        try? data.write(to: mediaURL, options: .atomic)
+                    } else {
+                        // RAW 素材要保留全分辨率（导出用），普通照片压到 2048 长边
+                        let isRaw = item.payload.subtitle.contains("RAW")
+                        let edge: CGFloat = isRaw ? 12000 : 2048
+                        let quality: CGFloat = isRaw ? 0.96 : 0.9
+                        if let data = scaled(item.payload.image, maxEdge: edge)
+                            .jpegData(compressionQuality: quality) {
+                            try? data.write(to: mediaURL, options: .atomic)
+                        }
                     }
                 }
 
