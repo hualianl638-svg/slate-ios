@@ -135,7 +135,18 @@ final class LibraryStore: ObservableObject {
                     }
                 }
                 guard let image else { throw LibraryError.unsupported }
-                _ = rawKey
+                let payload = LibraryPayload(
+                    image: image,
+                    isVideo: false,
+                    videoURL: nil,
+                    title: isRaw ? "RAW 照片" : "照片",
+                    subtitle: "\(Int(image.size.width)) × \(Int(image.size.height))"
+                        + (isRaw ? " · RAW" : ""),
+                    editKey: picker.itemIdentifier.map { "photo-" + $0 }
+                        ?? rawKey ?? Self.photoKey(for: Data())
+                )
+                items.insert(LibraryItem(payload: payload), at: 0)
+                LibraryDisk.save(items)
 
             }
         } catch {
@@ -147,6 +158,8 @@ final class LibraryStore: ObservableObject {
         items.removeAll { $0.id == item.id }
         LibraryDisk.save(items)
         EditStateStore.shared.clear(for: item.payload.editKey)
+        // RAW 原片必须一起删：否则空间不释放，2GB 上限会把导入永久锁死
+        RawImage.deleteOriginal(key: item.payload.editKey)
     }
 
     /// 按天分组（最近的在前）。
