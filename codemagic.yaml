@@ -1,0 +1,92 @@
+# Codemagic CI 配置（免费 macOS 构建，用于产出未签名 IPA）
+#
+# 用法：
+#   1. https://codemagic.io 用 GitHub 账号登录
+#   2. Add application -> 选择 hualianl638-svg/slate-ios
+#   3. 选择 "Other" / 手动配置，Codemagic 会自动识别本文件
+#   4. Start new build -> 选 ios-unsigned -> 完成后在 Artifacts 下载 SLATE.ipa
+#
+# 说明：
+#   · 免费额度 500 分钟/月（macOS M2），一次构建约 6–10 分钟
+#   · 构建产物是**未签名** IPA，需用 AltStore / SideStore / Sideloadly 重签安装
+#   · 与 GitHub Actions 的 workflow 互不影响，两套都能用
+
+workflows:
+  ios-unsigned:
+    name: SLATE unsigned IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: latest
+      vars:
+        SCHEME: SLATE
+    cache:
+      cache_paths:
+        - $HOME/Library/Caches/Homebrew
+        - $HOME/Library/Developer/Xcode/DerivedData
+
+    scripts:
+      - name: 安装 XcodeGen
+        script: |
+          set -e
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: 生成 Xcode 工程
+        script: |
+          set -e
+          cd app
+          xcodegen generate
+          ls -la
+
+      - name: 编译（无签名）
+        script: |
+          set -e
+          cd app
+          xcodebuild \
+            -project SLATE.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: 打包 IPA 并校验内容
+        script: |
+          set -e
+          cd app
+          APP_PATH="build/Build/Products/Release-iphoneos/SLATE.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "未找到构建产物 $APP_PATH"
+            find build/Build/Products -maxdepth 3 -name "*.app" || true
+            exit 1
+          fi
+          rm -rf Payload SLATE.ipa
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry SLATE.ipa Payload
+
+          echo "--- 校验 ---"
+          ls -lh SLATE.ipa
+          echo "内置 LUT："
+          ls -1 Payload/SLATE.app/*.cube || echo "警告：没有找到 .cube 资源"
+          echo "Info.plist 关键项："
+          plutil -p Payload/SLATE.app/Info.plist | grep -E "CFBundleDisplayName|CFBundleShortVersionString|UIFileSharingEnabled|MinimumOSVersion" || true
+
+    artifacts:
+      - app/SLATE.ipa
+
+    publishing:
+      # 仅生成产物，不上架。构建成功后可在 Codemagic 页面直接下载。
+      email:
+        recipients:
+          - example@example.com
+        notify:
+          success: false
+          failure: false
