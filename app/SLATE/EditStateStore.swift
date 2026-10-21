@@ -121,14 +121,22 @@ final class EditStateStore {
               var state = try? JSONDecoder().decode(EditState.self, from: saved.stateJSON)
         else { return nil }
 
-        // 补回不在 CodingKeys 里的字段
-        state.cropMask = saved.cropMask
+        // EditState 没有自定义 CodingKeys，合成编码器其实已包含全部字段，
+        // 因此 stateJSON 解码出来的值优先；只有它是默认值时（旧存档缺字段）
+        // 才用 SavedEdit 的副本兜底——否则会用旧副本的默认值覆盖掉真实数据。
+        if state.cropMask == CropMaskSettings(), saved.cropMask != CropMaskSettings() {
+            state.cropMask = saved.cropMask
+        }
         state.cropMask.bypassCrop = false
-        state.logProfileIndex = saved.logProfileIndex
-        state.restoreEnabled = saved.restoreEnabled
-        state.restoreLUTName = saved.restoreLUTName
-        state.trimStart = min(max(saved.trimStart, 0), 0.98)
-        state.trimEnd = min(max(saved.trimEnd, state.trimStart + 0.02), 1)
+        if state.logProfileIndex == 0 { state.logProfileIndex = saved.logProfileIndex }
+        if !state.restoreEnabled { state.restoreEnabled = saved.restoreEnabled }
+        if state.restoreLUTName.isEmpty { state.restoreLUTName = saved.restoreLUTName }
+        if state.trimStart == 0 && state.trimEnd == 1 {
+            state.trimStart = min(max(saved.trimStart, 0), 0.98)
+            state.trimEnd = min(max(saved.trimEnd, state.trimStart + 0.02), 1)
+        }
+        state.trimStart = min(max(state.trimStart, 0), 0.98)
+        state.trimEnd = min(max(state.trimEnd, state.trimStart + 0.02), 1)
         return state
     }
 
