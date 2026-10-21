@@ -482,7 +482,7 @@ struct EditorScreen: View {
                         } else {
                             model.setTrim(start: model.trimStart, end: fraction)
                         }
-                        syncTrim()
+                        // 同步交给 onChange(of: model.trimStart/trimEnd)，这里不再重复
                     }
                     .onEnded { _ in
                         // 松手后把播放头拉回选区内，避免停留在被裁掉的区域
