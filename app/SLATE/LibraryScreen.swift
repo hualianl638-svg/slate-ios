@@ -65,6 +65,12 @@ final class LibraryStore: ObservableObject {
         items = LibraryDisk.load()
     }
 
+    /// 插入一条素材并落盘（外部无法直接改 private(set) 的 items）。
+    func insert(_ item: LibraryItem) {
+        items.insert(item, at: 0)
+        LibraryDisk.save(items)
+    }
+
     /// 从系统相册选择结果导入一条素材。
     func importItem(_ picker: PhotosPickerItem) async {
         let isVideo = picker.supportedContentTypes.contains { type in
@@ -77,9 +83,9 @@ final class LibraryStore: ObservableObject {
         do {
             // 权限检查必须在 do 内，throw 才能被下面的 catch 接住并显示给用户。
             if rawLikely {
-                switch PHPhotoLibrary.authorizationStatus(for: .read) {
+                switch PHPhotoLibrary.authorizationStatus(for: .readWrite) {
                 case .notDetermined:
-                    let granted = await PHPhotoLibrary.requestAuthorization(for: .read)
+                    let granted = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
                     guard granted == .authorized else { throw RawImage.RawError.permissionDenied }
                 case .authorized:
                     break
@@ -291,14 +297,13 @@ struct LibraryScreen: View {
                         subtitle: "\(Int(image.size.width)) × \(Int(image.size.height)) · RAW",
                         editKey: key
                     )
-                    store.items.insert(LibraryItem(payload: payload), at: 0)
+                    store.insert(LibraryItem(payload: payload))
                     store.errorText = nil
                 } catch {
                     store.errorText = error.localizedDescription
                 }
                 if accessing { url.stopAccessingSecurityScopedResource() }
             }
-            LibraryDisk.save(store.items)
         }
     }
 

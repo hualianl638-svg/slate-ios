@@ -58,7 +58,8 @@ final class EditorModel: ObservableObject {
     // MARK: 载入
 
     func load(image: UIImage, isVideo: Bool, colorInfo: VideoColorInfo?) {
-        let ci = CIImage(image: image)
+        // CIImage(image:) 返回可选值，必须先解包（Codemagic 日志第 67/70 行的报错）
+        guard let ci = CIImage(image: image) else { return }
         self.sourceImage = ci
         // 全分辨率原图只保留在 sourceImage(导出用) 与 originalUIImage(对比用)，
         // 不要再复制一份到 displayImage——45MP 会多占约 180MB。
