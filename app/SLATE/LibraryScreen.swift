@@ -125,6 +125,7 @@ final class LibraryStore: ObservableObject {
     func remove(_ item: LibraryItem) {
         items.removeAll { $0.id == item.id }
         LibraryDisk.save(items)
+        EditStateStore.shared.clear(for: item.payload.editKey)
     }
 
     /// 按天分组（最近的在前）。
