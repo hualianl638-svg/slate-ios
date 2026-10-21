@@ -92,7 +92,8 @@ enum CropMask {
     static func crop(_ image: CIImage, settings: CropMaskSettings) -> CIImage {
         var source = image
 
-
+        // 规范化到 0...3（旧存档里可能有越界值，直接拿去索引会崩）
+        let turns = ((settings.turns % 4) + 4) % 4
         if turns != 0 {
             let orientations: [CGImagePropertyOrientation] = [.up, .right, .down, .left]
             source = source.oriented(orientations[turns])
@@ -143,14 +144,17 @@ enum CropMask {
         let extent = original.extent
         guard extent.width > 1, extent.height > 1 else { return adjusted }
 
+        // 同上：centerY 存的是"从顶部算起"的比例，Core Image 需要翻成 y-up
+        let normalizedCenterY = CGFloat(min(max(settings.centerY, 0), 1))
         let center = CGPoint(
             x: extent.minX + extent.width * CGFloat(min(max(settings.centerX, 0), 1)),
-            y: extent.minY + extent.height * CGFloat(min(max(settings.centerY, 0), 1))
+            y: extent.minY + extent.height * (1 - normalizedCenterY)
         )
 
         var mask: CIImage
         if settings.maskKind == 1 {
-            let angle = CGFloat(settings.angle) * .pi / 180
+            // 预览里角度是按 y-down 视觉给的，转成 y-up 需取反
+            let angle = -CGFloat(settings.angle) * .pi / 180
             let span = max(extent.width, extent.height) * 0.75
             let dx = cos(angle) * span
             let dy = sin(angle) * span

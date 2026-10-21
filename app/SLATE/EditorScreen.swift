@@ -934,10 +934,19 @@ struct EditorScreen: View {
 
             HStack(spacing: 10) {
                 SLTextButton(title: "水平镜像") {
-                    setCrop(\.flipHorizontal, !model.cropMask.flipHorizontal)
+                    var settings = model.cropMask
+                    settings.flipHorizontal.toggle()
+                    // 镜像后画面左右互换，裁剪框要跟着映射，否则非对称取景会被切掉
+                    settings.cropX = max(0, min(1 - settings.cropX - settings.cropWidth, 1 - settings.cropWidth))
+                    model.cropMask = settings
+                    playback.refresh()
                 }
                 SLTextButton(title: "垂直镜像") {
-                    setCrop(\.flipVertical, !model.cropMask.flipVertical)
+                    var settings = model.cropMask
+                    settings.flipVertical.toggle()
+                    settings.cropY = max(0, min(1 - settings.cropY - settings.cropHeight, 1 - settings.cropHeight))
+                    model.cropMask = settings
+                    playback.refresh()
                 }
                 Spacer()
             }

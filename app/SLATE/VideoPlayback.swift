@@ -163,13 +163,18 @@ final class VideoPlayback: ObservableObject {
     func seek(to seconds: Double) {
         guard let player else { return }
         let clamped = min(max(seconds, 0), max(duration, 0))
+        currentTime = clamped
+        // seek 是异步的：必须在完成回调里再取帧，
+        // 否则立即渲染读到的还是 seek 前的 itemTime（画面停在旧帧）。
         player.seek(
             to: CMTime(seconds: clamped, preferredTimescale: 600),
             toleranceBefore: .zero,
             toleranceAfter: .zero
-        )
-        currentTime = clamped
-        renderCurrentFrame(force: true)
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.renderCurrentFrame(force: true)
+            }
+        }
     }
 
     /// 调色参数变化时刷新当前帧（暂停状态下的实时预览）。
