@@ -92,7 +92,14 @@ enum CropMask {
     static func crop(_ image: CIImage, settings: CropMaskSettings) -> CIImage {
         var source = image
 
-        // 镜像：先翻转并归位到原点（不改变尺寸），再交给旋转
+
+        if turns != 0 {
+            let orientations: [CGImagePropertyOrientation] = [.up, .right, .down, .left]
+            source = source.oriented(orientations[turns])
+        }
+
+        // 镜像放在旋转之后：R∘H = V∘R，若先镜像，90°/270° 时
+        // 「水平镜像」实际会变成上下翻转。
         if settings.flipHorizontal || settings.flipVertical {
             source = source.transformed(by: CGAffineTransform(
                 scaleX: settings.flipHorizontal ? -1 : 1,
@@ -103,23 +110,21 @@ enum CropMask {
                 y: -source.extent.origin.y
             ))
         }
-
-        let turns = ((settings.turns % 4) + 4) % 4
-        if turns != 0 {
-            let orientations: [CGImagePropertyOrientation] = [.up, .right, .down, .left]
-            source = source.oriented(orientations[turns])
-        }
         guard !settings.bypassCrop else { return source }
         guard settings.isCropActive else { return source }
 
         let extent = source.extent
         guard extent.width > 1, extent.height > 1 else { return source }
 
+        // Core Image 是 y-up（底边原点），而预览裁剪框是左上原点（y-down）。
+        // 之前两边直接用同一个 cropY，导致上下不对称的框会裁出垂直镜像的区域。
+        let normalizedY = CGFloat(min(max(settings.cropY, 0), 1))
+        let normalizedH = CGFloat(min(max(settings.cropHeight, 0.02), 1))
         let rect = CGRect(
             x: extent.minX + extent.width * CGFloat(min(max(settings.cropX, 0), 1)),
-            y: extent.minY + extent.height * CGFloat(min(max(settings.cropY, 0), 1)),
+            y: extent.minY + extent.height * (1 - normalizedY - normalizedH),
             width: extent.width * CGFloat(min(max(settings.cropWidth, 0.02), 1)),
-            height: extent.height * CGFloat(min(max(settings.cropHeight, 0.02), 1))
+            height: extent.height * normalizedH
         )
         // 注意：不要再用 .integral 做像素扩边。
         // 扩边会让实际裁剪宽高比与用户看到/设定的框产生 1~2px 偏差，

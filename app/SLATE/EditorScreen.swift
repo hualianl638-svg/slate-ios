@@ -238,6 +238,7 @@ struct EditorScreen: View {
                 // 抬高控件层，保证裁剪手柄层不会盖住这两个按钮
             }
             .padding(10)
+            .allowsHitTesting(tool != .crop)
 
             if model.isRendering {
                 ProgressView()
@@ -492,6 +493,10 @@ struct EditorScreen: View {
 
     private func syncTrim() {
         playback.applyTrim(start: model.trimStart, end: model.trimEnd)
+        // 恢复的选段起点可能 > 0，而播放头仍在 0 -> 会显示已裁掉的画面
+        if playback.duration > 0, playback.progress < model.trimStart - 0.001 {
+            playback.seek(to: model.trimStart * playback.duration)
+        }
     }
 
     /// 把该素材上次保存的调整恢复到模型。
@@ -499,10 +504,13 @@ struct EditorScreen: View {
     /// 放在 onAppear 而不是父视图 init：init 时 @StateObject 还没挂载，
     /// requestRender 触发的 @Published 更新可能被丢弃，导致照片恢复后不重渲染。
     private func restoreSavedEditIfNeeded() {
-        guard !didRestoreEdit else { return }
+        guard !didRestoreEdit, !editKey.isEmpty else { return }
+        guard let saved = EditStateStore.shared.restore(for: editKey) else {
+            // 没有存档：本会话不再重试，但不影响其它流程
+            didRestoreEdit = true
+            return
+        }
         didRestoreEdit = true
-        guard !editKey.isEmpty,
-              let saved = EditStateStore.shared.restore(for: editKey) else { return }
         model.restore(saved)
     }
 
@@ -948,6 +956,8 @@ struct EditorScreen: View {
                     settings.cropHeight = 1
                     settings.aspectLock = 0
                     settings.turns = 0
+                    settings.flipHorizontal = false
+                    settings.flipVertical = false
                     model.cropMask = settings
                     playback.refresh()
                 }

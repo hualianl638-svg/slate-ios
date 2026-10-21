@@ -123,7 +123,8 @@ final class LibraryStore: ObservableObject {
     }
 
     func remove(_ item: LibraryItem) {
-        items.removeAll { $0.id == item.id }        LibraryDisk.save(items)
+        items.removeAll { $0.id == item.id }
+        LibraryDisk.save(items)
     }
 
     /// 按天分组（最近的在前）。

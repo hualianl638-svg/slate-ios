@@ -75,7 +75,7 @@ final class EditStateStore {
     static let shared = EditStateStore()
 
     /// 最多保留多少条素材存档。
-    private let maxEntries = 40
+    private let maxEntries = 60
 
     private let defaults = UserDefaults.standard
     private let prefix = "slate.edit."

@@ -33,6 +33,9 @@ enum LibraryDisk {
     /// 最多保留多少条（超出按最旧淘汰）。
     static let maxEntries = 60
 
+    /// 串行队列：save 必须串行，否则旧快照的 prune 会删掉新快照刚写的文件。
+    private static let diskQueue = DispatchQueue(label: "slate.library.disk", qos: .utility)
+
     static var root: URL {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return documents.appendingPathComponent("Library", isDirectory: true)
@@ -47,7 +50,7 @@ enum LibraryDisk {
     /// 把当前图库写入磁盘（媒体与缩略图按需生成，已存在的不重写）。
     static func save(_ items: [LibraryItem]) {
         let snapshot = items
-        DispatchQueue.global(qos: .utility).async {
+        diskQueue.async {
             let manager = FileManager.default
             try? manager.createDirectory(at: mediaDirectory, withIntermediateDirectories: true)
             try? manager.createDirectory(at: thumbDirectory, withIntermediateDirectories: true)
