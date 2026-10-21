@@ -81,12 +81,3 @@ workflows:
 
     artifacts:
       - app/SLATE.ipa
-
-    publishing:
-      # 仅生成产物，不上架。构建成功后可在 Codemagic 页面直接下载。
-      email:
-        recipients:
-          - example@example.com
-        notify:
-          success: false
-          failure: false
