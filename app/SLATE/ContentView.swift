@@ -35,6 +35,9 @@ final class EditorModel: ObservableObject {
 
     /// 原图（已转正的 CIImage），用于重复渲染。
     private(set) var sourceImage: CIImage?
+    /// 预览用降采样源图（长边 ≤ 2048）。RAW/大图渲染预览时用它，
+    /// 导出仍用 sourceImage 全分辨率，避免每帧产出上百 MB 的 CGImage。
+    private(set) var previewSource: CIImage?
     /// 原图缩略（用于"对比"时直接显示，避免重渲）。
     private(set) var originalUIImage: UIImage?
 
@@ -57,6 +60,14 @@ final class EditorModel: ObservableObject {
     func load(image: UIImage, isVideo: Bool, colorInfo: VideoColorInfo?) {
         let ci = CIImage(image: image)
         self.sourceImage = ci
+        // 预览源图：长边超过 2048 就降采样（RAW 常见 6000×4000）
+        let longest = max(ci.extent.width, ci.extent.height)
+        if longest > 2048 {
+            let scale = 2048 / longest
+            self.previewSource = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        } else {
+            self.previewSource = ci
+        }
         self.originalUIImage = image
         self.state.mediaKind = isVideo ? .video : .image
         self.state.videoColorInfo = colorInfo
@@ -332,7 +343,8 @@ final class EditorModel: ObservableObject {
     /// 节流策略：同一轮 RunLoop 内多次修改只渲染最后一帧（丢过期结果），
     /// 拖动滑块时不会堆积任务。
     func requestRender() {
-        guard let source = sourceImage else { return }
+        // 预览渲染用降采样源；导出走 sourceImage（全分辨率）
+        guard let source = previewSource ?? sourceImage else { return }
         renderGeneration += 1
         let generation = renderGeneration
         let snapshot = state

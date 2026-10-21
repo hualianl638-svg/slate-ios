@@ -7,6 +7,7 @@
 
 import AVFoundation
 import CryptoKit
+import Photos
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -68,6 +69,12 @@ final class LibraryStore: ObservableObject {
     func importItem(_ picker: PhotosPickerItem) async {
         let isVideo = picker.supportedContentTypes.contains { type in
             type.conforms(to: .movie) || type.conforms(to: .video)
+        }
+
+        // 相册权限：未授权时 PhotoKit 拿不到 RAW 原始资源，
+        // 会静默退化成 JPEG 预览——与「不降级」需求冲突，所以先请求。
+        if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
+            _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
         }
 
         do {
