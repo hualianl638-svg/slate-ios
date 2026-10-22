@@ -41,10 +41,9 @@ struct FullPreviewView: View {
                     .scaledToFit()
                     .scaleEffect(scale)
                     .offset(offset)
-                    .gesture(magnification)
-                    .gesture(drag)
-                    .onTapGesture(count: 2) { toggleZoom() }
-                    .animation(.easeOut(duration: 0.18), value: scale)
+                    .simultaneousGesture(magnification)
+                    .simultaneousGesture(drag)
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { toggleZoom() })
                     .ignoresSafeArea()
             } else {
                 Text("暂无可预览的画面")
@@ -112,6 +111,15 @@ struct FullPreviewView: View {
             }
         }
         .statusBarHidden(true)
+        .onAppear {
+            // 只有全屏预览允许横屏，编辑器/图库保持竖屏
+            OrientationController.shared.allowLandscape = true
+            OrientationController.refresh()
+        }
+        .onDisappear {
+            OrientationController.shared.allowLandscape = false
+            OrientationController.refresh()
+        }
     }
 
     // MARK: 手势
@@ -123,12 +131,16 @@ struct FullPreviewView: View {
                 scale = min(max(next, minScale), maxScale)
             }
             .onEnded { _ in
-                lastScale = scale
+                lastScale = min(max(scale, minScale), maxScale)
+                scale = lastScale
                 if scale <= minScale {
                     withAnimation(.easeOut(duration: 0.18)) {
                         offset = .zero
                         lastOffset = .zero
                     }
+                } else {
+                    offset = clamp(offset)
+                    lastOffset = offset
                 }
             }
     }
@@ -137,14 +149,23 @@ struct FullPreviewView: View {
         DragGesture()
             .onChanged { value in
                 guard scale > 1.01 else { return }
-                offset = CGSize(
+                offset = clamp(CGSize(
                     width: lastOffset.width + value.translation.width,
                     height: lastOffset.height + value.translation.height
-                )
+                ))
             }
             .onEnded { _ in
                 lastOffset = offset
             }
+    }
+
+    /// 粗略限制拖动范围：让图像至少保留在屏幕内，不至于整幅拖丢。
+    private func clamp(_ size: CGSize) -> CGSize {
+        let limit = CGSize(width: 420 * max(scale, 1), height: 420 * max(scale, 1))
+        return CGSize(
+            width: min(max(size.width, -limit.width), limit.width),
+            height: min(max(size.height, -limit.height), limit.height)
+        )
     }
 
     private func toggleZoom() {
