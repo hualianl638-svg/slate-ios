@@ -12,6 +12,7 @@ import Foundation
 import Photos
 import UIKit
 import CoreImage
+import UniformTypeIdentifiers
 
 enum RawImage {
 
@@ -67,8 +68,31 @@ enum RawImage {
         return false
     }
 
-    /// 猜测扩展名（ImageIO 靠它选 RAW 解码器）。
+    /// 决定临时文件的扩展名——ImageIO 靠它选 RAW 解码器，猜错就会解码失败。
+    /// 优先用调用方给的 UTI（相册资源的 uniformTypeIdentifier 最准确），
+    /// 否则扫描厂商标记（ARW/NEF/RAF 都是 TIFF 头，偏移 8 处认不出来）。
+    static func preferredExtension(_ data: Data, hint: String?) -> String {
+        if let hint, let type = UTType(hint), let ext = type.preferredFilenameExtension {
+            return ext
+        }
+        let window = [UInt8](data.prefix(min(data.count, 65536)))
+        let text = String(bytes: window, encoding: .ascii) ?? ""
+        if text.contains("SONY") { return "arw" }
+        if text.contains("NIKON") || text.contains("Nikon") { return "nef" }
+        if text.contains("FUJIFILM") { return "raf" }
+        if text.contains("Canon") { return "cr2" }
+        if text.contains("Panasonic") { return "rw2" }
+        if text.contains("OLYMPUS") { return "orf" }
+        if text.contains("PENTAX") { return "pef" }
+        return "dng"
+    }
+
+    /// 兼容旧调用（不带 hint 时按厂商字符串识别）。
     static func guessedExtension(_ data: Data) -> String {
+        preferredExtension(data, hint: nil)
+    }
+
+    static func legacyGuessedExtension(_ data: Data) -> String {
         guard data.count > 12 else { return "dng" }
         let head = [UInt8](data.prefix(16))
         if data.prefix(8) == Data("FUJIFILM".utf8) { return "raf" }
@@ -84,7 +108,7 @@ enum RawImage {
     }
 
     /// 从相册资源取 RAW 原始数据。
-    static func loadRawData(identifier: String) async -> Data? {
+    static func loadRawAsset(identifier: String) async -> (data: Data, uti: String?)? {
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
         guard let asset = assets.firstObject else { return nil }
         let resources = PHAssetResource.assetResources(for: asset)
@@ -110,18 +134,19 @@ enum RawImage {
         return await withCheckedContinuation { continuation in
             let options = PHAssetResourceRequestOptions()
             options.isNetworkAccessAllowed = true
+            let uti = raw.uniformTypeIdentifier
             PHAssetResourceManager.default().writeData(for: raw, toFile: temporary, options: options) { error in
-                guard error == nil else {
+                guard error == nil, let data = try? Data(contentsOf: temporary) else {
                     continuation.resume(returning: nil)
                     return
                 }
-                continuation.resume(returning: try? Data(contentsOf: temporary))
+                continuation.resume(returning: (data: data, uti: uti))
             }
         }
     }
 
     /// 解码 RAW 数据。失败返回 nil（调用方必须报错，不降级）。
-    static func decode(_ data: Data, maxPixelSize: CGFloat? = nil) -> UIImage? {
+    static func decode(_ data: Data, maxPixelSize: CGFloat? = nil, hint: String? = nil) -> UIImage? {
         let ext = guessedExtension(data)
         let temporary = FileManager.default.temporaryDirectory
             .appendingPathComponent("raw-\(UUID().uuidString).\(ext)")

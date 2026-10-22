@@ -133,13 +133,14 @@ final class LibraryStore: ObservableObject {
                 var isRaw = false
                 var rawKey: String?
                 if let identifier = picker.itemIdentifier,
-                   let rawData = await RawImage.loadRawData(identifier: identifier) {
-                    guard let decoded = RawImage.decode(rawData) else {
+                   let rawAsset = await RawImage.loadRawAsset(identifier: identifier) {
+                    // hint 传入资源的真实 UTI：ImageIO 靠它选对 RAW 解码器
+                    guard let decoded = RawImage.decode(rawAsset.data, hint: rawAsset.uti) else {
                         throw RawImage.RawError.unsupported
                     }
                     image = decoded
                     isRaw = true
-                    rawKey = try RawImage.saveOriginal(rawData, key: "photo-" + identifier)
+                    rawKey = try RawImage.saveOriginal(rawAsset.data, key: "photo-" + identifier)
                 }
                 if image == nil {
                     guard let data = try await picker.loadTransferable(type: Data.self) else {
