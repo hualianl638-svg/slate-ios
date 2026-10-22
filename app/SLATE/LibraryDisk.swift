@@ -106,6 +106,8 @@ enum LibraryDisk {
                 try? data.write(to: indexURL, options: .atomic)
             }
             prune(keeping: records)
+            // 索引之外的 RAW 原片也一起清掉，否则删除/淘汰后空间永不释放
+            RawImage.pruneOriginals(keeping: Set(records.map(\.editKey)))
         }
     }
 

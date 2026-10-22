@@ -254,6 +254,20 @@ enum RawImage {
         return files.first { $0.hasPrefix(safeKey + ".") }
     }
 
+    /// 清理"索引里已不存在"的 RAW 原片（素材被淘汰/删除后释放空间）。
+    static func pruneOriginals(keeping keys: Set<String>) {
+        let safeKeys = keys.map { $0.replacingOccurrences(of: "/", with: "-") }
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            atPath: originalsDirectory.path
+        ) else { return }
+        for file in files {
+            let key = (file as NSString).deletingPathExtension
+            if !safeKeys.contains(key) {
+                try? FileManager.default.removeItem(at: originalsDirectory.appendingPathComponent(file))
+            }
+        }
+    }
+
     /// 读取已保存的 RAW 原片。
     static func originalData(name: String) -> Data? {
         try? Data(contentsOf: originalsDirectory.appendingPathComponent(name))

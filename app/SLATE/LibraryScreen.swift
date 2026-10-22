@@ -81,18 +81,11 @@ final class LibraryStore: ObservableObject {
         let rawLikely = picker.supportedContentTypes.contains { $0.conforms(to: .rawImage) }
 
         do {
-            // 权限检查必须在 do 内，throw 才能被下面的 catch 接住并显示给用户。
-            if rawLikely {
-                switch PHPhotoLibrary.authorizationStatus(for: .readWrite) {
-                case .notDetermined:
-                    let granted = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-                    guard granted == .authorized else { throw RawImage.RawError.permissionDenied }
-                case .authorized:
-                    break
-                default:
-                    // .limited / .denied / .restricted：拿不到 RAW 原片 -> 直接报错，不降级
-                    throw RawImage.RawError.permissionDenied
-                }
+            // 权限只做"必要时弹窗"，**不预判拒绝**：
+            // .limited（选择部分照片）下这张图其实可能可读，
+            // 预判拒绝会让用户刚授权就被报错。
+            if rawLikely, PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
+                _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
             }
             if isVideo {
                 guard let movie = try await picker.loadTransferable(type: Movie.self) else {
@@ -286,6 +279,7 @@ struct LibraryScreen: View {
         /// 从「文件」App 导入 RAW 原片（支持多选）。
     private func importRawFiles(_ urls: [URL]) {
         Task {
+            var failures: [String] = []
             for url in urls {
                 let accessing = url.startAccessingSecurityScopedResource()
                 do {
@@ -308,7 +302,7 @@ struct LibraryScreen: View {
                     store.insert(LibraryItem(payload: payload))
                     store.errorText = nil
                 } catch {
-                    store.errorText = error.localizedDescription
+                    failures.append(error.localizedDescription)
                 }
                 if accessing { url.stopAccessingSecurityScopedResource() }
             }
@@ -397,7 +391,9 @@ var body: some View {
                     .foregroundStyle(Theme.text)
                     .padding(.horizontal, 12)
                     .frame(height: 32)
+                    .background(Theme.surface2, in: Capsule())
                     .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 0.5))
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
 
