@@ -144,7 +144,8 @@ final class LibraryStore: ObservableObject {
                 }
                 // 明确是 RAW 却取不到原始资源 -> 报错，不允许静默降级成 JPEG 预览
                 if rawLikely, image == nil {
-                    throw RawImage.RawError.unsupported
+                    // 明确是 RAW 却拿不到原始资源：多半是权限/仅 iCloud 预览，不是格式问题
+                    throw RawImage.RawError.rawUnavailable
                 }
                 if image == nil {
                     guard let data = try await picker.loadTransferable(type: Data.self) else {

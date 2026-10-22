@@ -264,6 +264,7 @@ enum RawImage {
         case unsupported
         case permissionDenied
         case decodeFailed(name: String, megabytes: Double)
+        case rawUnavailable
 
         var errorDescription: String? {
             switch self {
@@ -271,6 +272,8 @@ enum RawImage {
                 return "RAW 存储已满（上限 \(limitMB)MB），请到图库删除部分 RAW 素材后再导入"
             case .unsupported:
                 return "此 RAW 格式系统无法解码（支持 CR2/CR3/ARW/NEF/RAF/DNG 等），请改用 JPEG/HEIC"
+            case .rawUnavailable:
+                return "取不到这张 RAW 的原始文件（可能在 iCloud 尚未下载，或相册权限不是「完全访问」）。请先到设置里确认权限，或点「RAW 文件」从文件 App 导入原片。"
             case .decodeFailed(let name, let megabytes):
                 return "无法解码 \(name)（\(String(format: "%.1f", megabytes)) MB）。iOS 可能暂不支持该机型的 RAW 压缩格式，可尝试在相机/电脑上转成 DNG 或 JPEG 后再导入。"
             case .permissionDenied:
