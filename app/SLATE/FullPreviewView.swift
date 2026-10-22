@@ -54,7 +54,12 @@ struct FullPreviewView: View {
             VStack {
                 HStack {
                     Spacer()
-                    Button(action: onClose) {
+                    Button {
+                        // 先转回竖屏再关闭，否则会回到横屏的编辑器（布局会被压坏）
+                        OrientationController.shared.allowLandscape = false
+                        OrientationController.refresh()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { onClose() }
+                    } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(.white)
@@ -111,6 +116,13 @@ struct FullPreviewView: View {
             }
         }
         .statusBarHidden(true)
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            // 旋转后容器尺寸变了，缩放/偏移必须复位，否则画面可能整幅移出屏幕
+            scale = 1
+            lastScale = 1
+            offset = .zero
+            lastOffset = .zero
+        }
         .onAppear {
             // 只有全屏预览允许横屏，编辑器/图库保持竖屏
             OrientationController.shared.allowLandscape = true
