@@ -360,6 +360,7 @@ var body: some View {
             }
 
             HStack(spacing: 8) {
+                // 主入口：系统相册（实心强调色胶囊）
                 Button {
                     showImporter = true
                 } label: {
@@ -367,20 +368,33 @@ var body: some View {
                         Image(systemName: "photo.on.rectangle.angled")
                             .font(.system(size: 11, weight: .semibold))
                         Text("从相册选择")
-                        SLTextButton(title: "导入 RAW") { showRawImporter = true }
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 13, weight: .semibold))
                     }
                     .foregroundStyle(Theme.onAccent)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 14)
                     .frame(height: 32)
                     .background(Theme.accent, in: Capsule())
                 }
                 .buttonStyle(.plain)
 
-                Text("系统相册，可按相簿/文件夹浏览")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.meta)
-                Spacer()
+                // 次入口：RAW 原片（描边胶囊，视觉层级低于主按钮）
+                Button {
+                    showRawImporter = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "doc.badge.plus")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("RAW 文件")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(Theme.text)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .overlay(Capsule().stroke(Theme.line, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
             }
 
             HStack(spacing: 8) {
