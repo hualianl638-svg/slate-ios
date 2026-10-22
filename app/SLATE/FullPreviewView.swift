@@ -2,7 +2,8 @@
 //  FullPreviewView.swift
 //  SLATE
 //
-//  放大预览：整屏显示当前画面，视频可在此直接播放/暂停。
+//  放大预览：全屏显示当前画面，支持双指缩放 / 拖动查看细节，
+//  并允许在这里横屏观看（App 本身以竖屏为主，仅此页放开方向）。
 //
 
 import SwiftUI
@@ -13,6 +14,15 @@ struct FullPreviewView: View {
     @ObservedObject var playback: VideoPlayback
     let image: UIImage?
     var onClose: () -> Void
+
+    /// 当前缩放倍率与拖拽偏移。
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+
+    private let minScale: CGFloat = 1
+    private let maxScale: CGFloat = 6
 
     /// 视频优先用播放器当前帧；照片用传入的渲染结果。
     private var displayImage: UIImage? {
@@ -29,6 +39,12 @@ struct FullPreviewView: View {
                 Image(uiImage: displayImage)
                     .resizable()
                     .scaledToFit()
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .gesture(magnification)
+                    .gesture(drag)
+                    .onTapGesture(count: 2) { toggleZoom() }
+                    .animation(.easeOut(duration: 0.18), value: scale)
                     .ignoresSafeArea()
             } else {
                 Text("暂无可预览的画面")
@@ -77,6 +93,70 @@ struct FullPreviewView: View {
                     }
                     .padding(.bottom, 40)
                 }
+            }
+
+            // 缩放时给一个"当前倍率"提示，方便确认手势生效
+            if scale > 1.02 {
+                VStack {
+                    Text(String(format: "%.1f×", scale))
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .monoDigits()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .padding(.top, 56)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .statusBarHidden(true)
+    }
+
+    // MARK: 手势
+
+    private var magnification: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                let next = lastScale * value
+                scale = min(max(next, minScale), maxScale)
+            }
+            .onEnded { _ in
+                lastScale = scale
+                if scale <= minScale {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        offset = .zero
+                        lastOffset = .zero
+                    }
+                }
+            }
+    }
+
+    private var drag: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard scale > 1.01 else { return }
+                offset = CGSize(
+                    width: lastOffset.width + value.translation.width,
+                    height: lastOffset.height + value.translation.height
+                )
+            }
+            .onEnded { _ in
+                lastOffset = offset
+            }
+    }
+
+    private func toggleZoom() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            if scale > 1.01 {
+                scale = 1
+                lastScale = 1
+                offset = .zero
+                lastOffset = .zero
+            } else {
+                scale = 2.5
+                lastScale = 2.5
             }
         }
     }
