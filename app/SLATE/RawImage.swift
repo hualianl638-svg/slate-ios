@@ -147,7 +147,7 @@ enum RawImage {
 
     /// 解码 RAW 数据。失败返回 nil（调用方必须报错，不降级）。
     static func decode(_ data: Data, maxPixelSize: CGFloat? = nil, hint: String? = nil) -> UIImage? {
-        let ext = guessedExtension(data)
+        let ext = preferredExtension(data, hint: hint)
         let temporary = FileManager.default.temporaryDirectory
             .appendingPathComponent("raw-\(UUID().uuidString).\(ext)")
         guard (try? data.write(to: temporary)) != nil else { return nil }
