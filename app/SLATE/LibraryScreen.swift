@@ -142,6 +142,10 @@ final class LibraryStore: ObservableObject {
                     isRaw = true
                     rawKey = try RawImage.saveOriginal(rawAsset.data, key: "photo-" + identifier)
                 }
+                // 明确是 RAW 却取不到原始资源 -> 报错，不允许静默降级成 JPEG 预览
+                if rawLikely, image == nil {
+                    throw RawImage.RawError.unsupported
+                }
                 if image == nil {
                     guard let data = try await picker.loadTransferable(type: Data.self) else {
                         throw LibraryError.unsupported
@@ -285,7 +289,8 @@ struct LibraryScreen: View {
                 let accessing = url.startAccessingSecurityScopedResource()
                 do {
                     let data = try Data(contentsOf: url)
-                    guard RawImage.looksLikeRaw(data), let image = RawImage.decode(data) else {
+                    let hint = UTType(filenameExtension: url.pathExtension)?.identifier
+                    guard RawImage.looksLikeRaw(data), let image = RawImage.decode(data, hint: hint) else {
                         throw RawImage.RawError.unsupported
                     }
                     let key = "raw-" + url.lastPathComponent + "-" + String(data.count)
@@ -390,7 +395,7 @@ var body: some View {
                     .foregroundStyle(Theme.text)
                     .padding(.horizontal, 12)
                     .frame(height: 32)
-                    .overlay(Capsule().stroke(Theme.line, lineWidth: 1))
+                    .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 0.5))
                 }
                 .buttonStyle(.plain)
 

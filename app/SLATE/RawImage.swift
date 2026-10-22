@@ -75,16 +75,20 @@ enum RawImage {
         if let hint, let type = UTType(hint), let ext = type.preferredFilenameExtension {
             return ext
         }
-        let window = [UInt8](data.prefix(min(data.count, 65536)))
-        let text = String(bytes: window, encoding: .ascii) ?? ""
-        if text.contains("SONY") { return "arw" }
-        if text.contains("NIKON") || text.contains("Nikon") { return "nef" }
-        if text.contains("FUJIFILM") { return "raf" }
-        if text.contains("Canon") { return "cr2" }
-        if text.contains("Panasonic") { return "rw2" }
-        if text.contains("OLYMPUS") { return "orf" }
-        if text.contains("PENTAX") { return "pef" }
-        return "dng"
+        // 必须按字节扫描：RAW 是二进制，String(encoding: .ascii) 会整体返回 nil
+        let window = Data(data.prefix(min(data.count, 65536)))
+        func contains(_ marker: String) -> Bool {
+            window.range(of: Data(marker.utf8)) != nil
+        }
+        if contains("SONY") { return "arw" }
+        if contains("NIKON") || contains("Nikon") { return "nef" }
+        if contains("FUJIFILM") { return "raf" }
+        if contains("Canon") { return "cr2" }
+        if contains("Panasonic") { return "rw2" }
+        if contains("OLYMPUS") { return "orf" }
+        if contains("PENTAX") { return "pef" }
+        // 兜底：CR3(ftyp)/ORF/RW2 的偏移-8 魔数识别
+        return legacyGuessedExtension(data)
     }
 
     /// 兼容旧调用（不带 hint 时按厂商字符串识别）。
@@ -228,7 +232,7 @@ enum RawImage {
             case .unsupported:
                 return "此 RAW 格式系统无法解码（支持 CR2/CR3/ARW/NEF/RAF/DNG 等），请改用 JPEG/HEIC"
             case .permissionDenied:
-                return "取回 RAW 原片需要相册「完全访问」权限。请到 设置 › 隐私与安全性 › 照片 › SLATE 改为完全访问后重试；也可以点「导入 RAW」从文件 App 选择原片。"
+                return "取回 RAW 原片需要相册「完全访问」权限。请到 设置 › 隐私与安全性 › 照片 › SLATE 改为完全访问后重试；也可以点「RAW 文件」从文件 App 选择原片。"
             }
         }
     }
