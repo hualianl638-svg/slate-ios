@@ -136,7 +136,7 @@ final class LibraryStore: ObservableObject {
                    let rawAsset = await RawImage.loadRawAsset(identifier: identifier) {
                     // hint 传入资源的真实 UTI：ImageIO 靠它选对 RAW 解码器
                     guard let decoded = RawImage.decode(rawAsset.data, hint: rawAsset.uti) else {
-                        throw RawImage.RawError.unsupported
+                        throw RawImage.decodeFailure(name: "相册 RAW 原片", data: rawAsset.data)
                     }
                     image = decoded
                     isRaw = true
@@ -290,8 +290,9 @@ struct LibraryScreen: View {
                 do {
                     let data = try Data(contentsOf: url)
                     let hint = UTType(filenameExtension: url.pathExtension)?.identifier
-                    guard RawImage.looksLikeRaw(data), let image = RawImage.decode(data, hint: hint) else {
-                        throw RawImage.RawError.unsupported
+                    guard RawImage.looksLikeRaw(data) else { throw RawImage.RawError.unsupported }
+                    guard let image = RawImage.decode(data, hint: hint) else {
+                        throw RawImage.decodeFailure(name: url.lastPathComponent, data: data)
                     }
                     let key = "raw-" + url.lastPathComponent + "-" + String(data.count)
                     _ = try RawImage.saveOriginal(data, key: key)

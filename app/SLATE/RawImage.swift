@@ -11,6 +11,7 @@
 import Foundation
 import Photos
 import UIKit
+import ImageIO
 import CoreImage
 import UniformTypeIdentifiers
 
@@ -149,33 +150,71 @@ enum RawImage {
         }
     }
 
-    /// 解码 RAW 数据。失败返回 nil（调用方必须报错，不降级）。
+    /// 多策略解码 RAW：
+    /// iOS 的 RAW 解码依赖"扩展名/UTI → 解码器"的匹配，猜错就返回 nil。
+    /// 这里把常见扩展名 × UTI hint × ImageIO/CoreImage 两条通道全部试一遍，
+    /// 仍失败才报错（并带上诊断信息，便于用户/开发者定位是哪张图不兼容）。
     static func decode(_ data: Data, maxPixelSize: CGFloat? = nil, hint: String? = nil) -> UIImage? {
-        let ext = preferredExtension(data, hint: hint)
-        let temporary = FileManager.default.temporaryDirectory
-            .appendingPathComponent("raw-\(UUID().uuidString).\(ext)")
-        guard (try? data.write(to: temporary)) != nil else { return nil }
-        defer { try? FileManager.default.removeItem(at: temporary) }
-
-        guard var output = CIImage(contentsOf: temporary) else {
-            return nil
+        let hintExtension = hint.flatMap { UTType($0)?.preferredFilenameExtension }
+        var extensions: [String] = []
+        for candidate in [hintExtension, preferredExtension(data, hint: hint), "arw", "dng", "tif"] {
+            if let candidate, !extensions.contains(candidate) { extensions.append(candidate) }
         }
-        if let maxPixelSize {
-            let longest = max(output.extent.width, output.extent.height)
-            if longest > maxPixelSize {
-                let scale = maxPixelSize / longest
-                output = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let utiHints: [String?] = [hint, "public.camera-raw-image", "com.sony.arw-raw-image", nil]
+
+        for ext in extensions {
+            let temporary = FileManager.default.temporaryDirectory
+                .appendingPathComponent("raw-\(UUID().uuidString).\(ext)")
+            guard (try? data.write(to: temporary)) != nil else { continue }
+            defer { try? FileManager.default.removeItem(at: temporary) }
+
+            // 通道 A：ImageIO + UTI hint（系统 RAW 解码器注册在 UTI 上）
+            for uti in utiHints {
+                var options: [CFString: Any] = [:]
+                if let uti { options[kCGImageSourceTypeIdentifierHint] = uti as CFString }
+                guard let source = CGImageSourceCreateWithURL(
+                    temporary as CFURL, options as CFDictionary
+                ) else { continue }
+                let decodeOptions: [CFString: Any] = [
+                    kCGImageSourceShouldCacheImmediately: true,
+                    kCGImageSourceCreateThumbnailFromImageAlways: false
+                ]
+                if let cgImage = CGImageSourceCreateImageAtIndex(source, 0, decodeOptions as CFDictionary) {
+                    return finish(cgImage, maxPixelSize: maxPixelSize)
+                }
+            }
+
+            // 通道 B：Core Image（部分 RAW 只有 CI 通道能读）
+            if let output = CIImage(contentsOf: temporary) {
+                let context = CIContext(options: [.workingColorSpace: CGColorSpace.extendedLinearSRGB])
+                if let cgImage = context.createCGImage(
+                    output,
+                    from: output.extent,
+                    format: .RGBA8,
+                    colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
+                ) {
+                    return finish(cgImage, maxPixelSize: maxPixelSize)
+                }
             }
         }
-        // 用线性 sRGB 工作空间，与管线里 CISRGBToneCurveToLinear 的假设一致
-        let context = CIContext(options: [.workingColorSpace: CGColorSpace.extendedLinearSRGB])
-        guard let cgImage = context.createCGImage(
-            output,
-            from: output.extent,
-            format: .RGBA8,
-            colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
-        ) else { return nil }
-        return UIImage(cgImage: cgImage)
+        return nil
+    }
+
+    /// 把解码出的 CGImage 转成 UIImage，并按需缩放。
+    private static func finish(_ cgImage: CGImage, maxPixelSize: CGFloat?) -> UIImage {
+        let image = UIImage(cgImage: cgImage)
+        guard let maxPixelSize else { return image }
+        let longest = max(image.size.width, image.size.height)
+        guard longest > maxPixelSize else { return image }
+        let scale = maxPixelSize / longest
+        let target = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: target)
+        return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: target)) }
+    }
+
+    /// 解码失败时报出可定位的错误（含文件名与大小）。
+    static func decodeFailure(name: String, data: Data) -> RawError {
+        RawError.decodeFailed(name: name, megabytes: Double(data.count) / 1_048_576)
     }
 
     /// 把 RAW 原片保存到 Documents/RawOriginals，返回文件名。
@@ -224,6 +263,7 @@ enum RawImage {
         case capacityExceeded(limitMB: Int)
         case unsupported
         case permissionDenied
+        case decodeFailed(name: String, megabytes: Double)
 
         var errorDescription: String? {
             switch self {
@@ -231,6 +271,8 @@ enum RawImage {
                 return "RAW 存储已满（上限 \(limitMB)MB），请到图库删除部分 RAW 素材后再导入"
             case .unsupported:
                 return "此 RAW 格式系统无法解码（支持 CR2/CR3/ARW/NEF/RAF/DNG 等），请改用 JPEG/HEIC"
+            case .decodeFailed(let name, let megabytes):
+                return "无法解码 \(name)（\(String(format: "%.1f", megabytes)) MB）。iOS 可能暂不支持该机型的 RAW 压缩格式，可尝试在相机/电脑上转成 DNG 或 JPEG 后再导入。"
             case .permissionDenied:
                 return "取回 RAW 原片需要相册「完全访问」权限。请到 设置 › 隐私与安全性 › 照片 › SLATE 改为完全访问后重试；也可以点「RAW 文件」从文件 App 选择原片。"
             }
